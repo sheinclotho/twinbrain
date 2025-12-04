@@ -81,77 +81,171 @@ class NodeEncoder(nn.Module):
         return x_hidden, N, stats
 
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F_nn
+from typing import Dict
+
 class NodeDecoder(nn.Module):
-    def __init__(self, hidden_dim=128, extra_hidden=128, num_layers=3):
+    """
+    NodeDecoder:
+    - Builds per-node-type MLP decoders at init (no lazy creation).
+    - Supports scale modes:
+        - "fixed": scale is fixed scalar (init_scale), requires_grad=False
+        - "learned": direct per-feature scale parameter (scale vector)
+        - "log": learn s and compute scale = exp(s) (stable, ensures positive)
+    - Provides denorm(...) helper to map normalized predictions back to original space.
+    - Exposes convenience methods to freeze/unfreeze scale parameters.
+    """
+
+    def __init__(self, node_types: list, out_dims: Dict[str, int], hidden_dim=128, extra_hidden=128, num_layers=3,
+                 init_scales: Dict[str, float] = None, scale_mode: str = "log"):
+        """
+        node_types: list of node_type names (e.g. ["fmri","eeg"])
+        out_dims: dict node_type -> output feature dim (F_rec)
+        init_scales: map node_type -> initial scale (float)
+        scale_mode: "fixed" | "learned" | "log"
+        """
         super().__init__()
-        self.decoders = nn.ModuleDict()      # 每个 node_type 独立 decoder
-        self.scale = nn.ParameterDict()      # 可学习缩放
-        self.bias = nn.ParameterDict()       # 可学习偏置
-        self.pre_scale = nn.ParameterDict()  # GRU 输出前可学习放大
         self.hidden_dim = hidden_dim
         self.extra_hidden = extra_hidden
         self.num_layers = num_layers
+        self.node_types = list(node_types)
+        self.out_dims = out_dims
+        self.scale_mode = scale_mode
+        self.decoders = nn.ModuleDict()
+        self.bias = nn.ParameterDict()
+        # scale containers:
+        # - learned: ParameterDict of vectors
+        # - log: ParameterDict of scalar s where scale = exp(s)
+        # - fixed: buffers (registered as tensors) in self.register_buffer
+        self._init_scales = init_scales or {}
+        self._create_decoders_and_scales()
 
-    def forward(self, recon_norm: torch.Tensor, stats: dict, node_type: str = "generic", debug=False):
+    def _create_decoder_mlp(self, in_dim, out_dim):
+        layers = []
+        in_d = in_dim
+        for i in range(self.num_layers):
+            out_d = self.extra_hidden if i < self.num_layers - 1 else out_dim
+            layers.append(nn.Linear(in_d, out_d))
+            if i < self.num_layers - 1:
+                layers.append(nn.LeakyReLU(0.1))
+            in_d = out_d
+        return nn.Sequential(*layers)
+
+    def _create_decoders_and_scales(self):
+        for nt in self.node_types:
+            F_rec = int(self.out_dims.get(nt, self.hidden_dim))
+            # decoder MLP
+            self.decoders[nt] = self._create_decoder_mlp(self.hidden_dim, F_rec)
+            # bias
+            self.bias[nt] = nn.Parameter(torch.zeros(F_rec))
+            # scale handling
+            init_s = float(self._init_scales.get(nt, 1.0))
+            if self.scale_mode == "fixed":
+                # register as buffer (non-trainable)
+                self.register_buffer(f"scale_fixed_{nt}", torch.ones(F_rec) * init_s)
+            elif self.scale_mode == "learned":
+                self.register_parameter(f"scale_{nt}", nn.Parameter(torch.ones(F_rec) * init_s))
+            elif self.scale_mode == "log":
+                # keep scalar log parameter per feature for stability
+                # store s as parameter; scale = exp(s)
+                self.register_parameter(f"log_scale_{nt}", nn.Parameter(torch.log(torch.ones(F_rec) * init_s)))
+            else:
+                raise ValueError(f"Unknown scale_mode {self.scale_mode}")
+
+        # expose accessors for convenience
+        # e.g. self.get_scale("fmri") returns a tensor (may depend on device)
+    def get_scale(self, node_type: str):
+        if self.scale_mode == "fixed":
+            return getattr(self, f"scale_fixed_{node_type}")
+        elif self.scale_mode == "learned":
+            return getattr(self, f"scale_{node_type}")
+        elif self.scale_mode == "log":
+            s = getattr(self, f"log_scale_{node_type}")
+            return torch.exp(s)
+        else:
+            raise ValueError(self.scale_mode)
+
+    def freeze_scale(self, node_type: str = None):
+        if node_type is None:
+            for nt in self.node_types:
+                self._set_scale_requires_grad(nt, False)
+        else:
+            self._set_scale_requires_grad(node_type, False)
+
+    def unfreeze_scale(self, node_type: str = None):
+        if node_type is None:
+            for nt in self.node_types:
+                self._set_scale_requires_grad(nt, True)
+        else:
+            self._set_scale_requires_grad(node_type, True)
+
+    def _set_scale_requires_grad(self, nt, flag: bool):
+        if self.scale_mode == "fixed":
+            return
+        if self.scale_mode == "learned":
+            p = getattr(self, f"scale_{nt}")
+            p.requires_grad = flag
+        elif self.scale_mode == "log":
+            p = getattr(self, f"log_scale_{nt}")
+            p.requires_grad = flag
+
+    def forward(self, recon_norm: torch.Tensor, stats: Dict[str, torch.Tensor], node_type: str = "generic"):
         """
         recon_norm: (N, T, H_in)
         stats: {"mean": (N,1,F), "std": (N,1,F)}
-        node_type: str
+        Returns: recon_denorm (N,T,F)
         """
         if recon_norm is None or recon_norm.numel() == 0:
             return recon_norm
-
         N, T, H_in = recon_norm.shape
         mean = stats.get("mean", None)
         std = stats.get("std", None)
-        F_rec = mean.shape[-1] if mean is not None else H_in
+        F_rec = mean.shape[-1] if mean is not None else self.decoders[node_type][-1].out_features
 
-        # 初始化 per-node_type decoder
-        if node_type not in self.decoders:
-            layers = []
-            in_dim = H_in
-            for i in range(self.num_layers):
-                out_dim = self.extra_hidden if i < self.num_layers - 1 else F_rec
-                layers.append(nn.Linear(in_dim, out_dim))
-                if i < self.num_layers - 1:
-                    layers.append(nn.LeakyReLU(0.1))
-                in_dim = out_dim
-            self.decoders[node_type] = nn.Sequential(*layers).to(recon_norm.device)
-
-            # scale / bias 初始化
-            init_scale = 5.0 if node_type == "fmri" else 8.0
-            self.scale[node_type] = nn.Parameter(torch.ones(F_rec, device=recon_norm.device) * init_scale)
-            self.bias[node_type] = nn.Parameter(torch.zeros(F_rec, device=recon_norm.device))
-            self.pre_scale[node_type] = nn.Parameter(torch.ones(1, device=recon_norm.device))
-
-        # 可选 GRU 输出放大
-        recon_norm = recon_norm * self.pre_scale[node_type]
-
-        # decoder 投影
+        # project via decoder
         recon_flat = recon_norm.reshape(-1, H_in)
         recon_learned = self.decoders[node_type](recon_flat).reshape(N, T, F_rec)
-
-        # scale + bias
-        recon_scaled = recon_learned * self.scale[node_type] + self.bias[node_type]
-
-        # 残差重建（如果 mean/std 已知）
+        # apply scale + bias
+        scale = self.get_scale(node_type)
+        bias = self.bias[node_type].view(1, 1, -1)
+        recon_scaled = recon_learned * scale.view(1, 1, -1) + bias
+        # denorm
         if mean is not None and std is not None:
             mean_expand = mean.expand(-1, T, -1)
             std_expand = std.expand(-1, T, -1)
             recon_denorm = recon_scaled * std_expand + mean_expand
         else:
-            print("No mean and std")
             recon_denorm = recon_scaled
-
-        # if debug:
-        #     print(f"[NodeDecoder:{node_type}] recon_learned mean={recon_learned.mean():.5f} std={recon_learned.std():.5f}")
-        #     print(f"[NodeDecoder:{node_type}] recon_scaled mean={recon_scaled.mean():.5f} std={recon_scaled.std():.5f}")
-        #     print(f"[NodeDecoder:{node_type}] recon_denorm mean={recon_denorm.mean():.5f} std={recon_denorm.std():.5f}")
-
         return recon_denorm
 
+    def forward_feature_and_denorm(self, recon_norm: torch.Tensor, stats: Dict[str, torch.Tensor], node_type: str = "generic"):
+        """
+        Returns tuple (recon_feature, recon_denorm)
+        - recon_feature: recon_learned after decoder but BEFORE scale/bias (N,T,F)
+        - recon_denorm: after scale/bias and denorm (N,T,F)
+        Useful if trainer wants to compute normalized-space losses.
+        """
+        if recon_norm is None or recon_norm.numel() == 0:
+            return recon_norm, recon_norm
+        N, T, H_in = recon_norm.shape
+        mean = stats.get("mean", None)
+        std = stats.get("std", None)
+        F_rec = mean.shape[-1] if mean is not None else self.decoders[node_type][-1].out_features
 
-
+        recon_flat = recon_norm.reshape(-1, H_in)
+        recon_learned = self.decoders[node_type](recon_flat).reshape(N, T, F_rec)
+        scale = self.get_scale(node_type)
+        bias = self.bias[node_type].view(1, 1, -1)
+        recon_scaled = recon_learned * scale.view(1, 1, -1) + bias
+        if mean is not None and std is not None:
+            mean_expand = mean.expand(-1, T, -1)
+            std_expand = std.expand(-1, T, -1)
+            recon_denorm = recon_scaled * std_expand + mean_expand
+        else:
+            recon_denorm = recon_scaled
+        return recon_learned, recon_denorm
 class GraphEncoder(nn.Module):
     """
     GraphEncoder: 管理每个 node_type 的 NodeEncoder，输出字典：
