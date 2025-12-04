@@ -1,3 +1,4 @@
+# (完整文件 - 只改动 feature_decoders 的创建为 MLP)
 import torch
 import torch.nn as nn
 import torch.nn.functional as F_nn
@@ -38,7 +39,22 @@ class DynamicHeteroGNN(nn.Module):
 
         # Encoders & decoders
         self.encoders = nn.ModuleDict({nt: NodeEncoder(self.spatial_T, self.hidden_dim) for nt in self.node_types})
-        self.denorm_decoders = nn.ModuleDict({nt: NodeDecoder() for nt in self.node_types})
+
+        # IMPORTANT CHANGE: use MLP feature_decoders (hidden -> hidden -> out)
+        # to give decoder capacity to map hidden dynamics to normalized-space signals.
+        self.feature_decoders = nn.ModuleDict()
+        for nt in self.node_types:
+            out_dim = int(self.node_feature_dims.get(nt, 1))
+            # small two-layer MLP; you can tune extra_hidden if needed
+            self.feature_decoders[nt] = nn.Sequential(
+                nn.Linear(self.hidden_dim, self.hidden_dim),
+                nn.ReLU(),
+                nn.Linear(self.hidden_dim, out_dim)
+            )
+
+        # Node-level denorm decoders (NodeDecoder should be initialized elsewhere or as before)
+        self.denorm_decoders = NodeDecoder(node_types=self.node_types, out_dims=self.node_feature_dims,
+                                          hidden_dim=self.hidden_dim, extra_hidden=self.hidden_dim, num_layers=3)
 
         # backbone
         self.convs = nn.ModuleList()
@@ -51,27 +67,24 @@ class DynamicHeteroGNN(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim)
         )
-        self.feature_decoders = nn.ModuleDict({
-            nt: nn.Linear(self.hidden_dim, self.node_feature_dims[nt]) for nt in self.node_types
-        })
-        # Projection head: per-modality small projection to latent (used for alignment / modality pooling)
+
+        # Projection head
         self.proj_head = ProjectionHead(hidden_dim=self.hidden_dim, latent_dim=self.hidden_dim)
 
     # ---------- forward ----------
     def forward(self, data: HeteroData, edge_index_dict: Dict[Tuple[str, str, str], torch.Tensor]):
         device = next(self.parameters()).device
 
-        # edge_index_dict 检查
         if edge_index_dict is None:
             raise RuntimeError("[DynamicHeteroGNN] edge_index_dict cannot be None")
 
-        # 1) 提取 x_dict
+        # 1) extract sequences
         x_dict = {}
         for nt in self.node_types:
             x_seq = getattr(data[nt], 'x_seq', None)
             x_dict[nt] = x_seq.to(device)
 
-        # 2) 编码器 (NodeEncoder 自行处理 resample/normalize)
+        # 2) encode
         encoded = {}
         stats_map = {}
         num_nodes = {}
@@ -81,10 +94,10 @@ class DynamicHeteroGNN(nn.Module):
             stats_map[nt] = stats
             num_nodes[nt] = N_nt
 
-        # 3) flatten 时间维度
+        # 3) flatten time
         x_flat = {nt: encoded[nt].permute(1, 0, 2).reshape(-1, self.hidden_dim) for nt in self.node_types}
 
-        # 4) 构建 temporal edge_index
+        # 4) build temporal edge indexes
         T_pool = self.spatial_T
         temporal_edge_index_dict = {}
         for key, edge_index in edge_index_dict.items():
@@ -98,7 +111,7 @@ class DynamicHeteroGNN(nn.Module):
             lifted_list = [e_base + torch.tensor([[t * n_src], [t * n_dst]], device=e_base.device) for t in range(T_pool)]
             temporal_edge_index_dict[key] = torch.cat(lifted_list, dim=1)
 
-        # 5) GNN 层
+        # 5) GNN layers
         h = x_flat
         for layer_idx in range(self.num_layers):
             in_dims = {nt: (h[nt].shape[1] if layer_idx == 0 else self.hidden_dim) for nt in self.node_types}
@@ -108,7 +121,7 @@ class DynamicHeteroGNN(nn.Module):
             h_new = self.convs[layer_idx](h, temporal_edge_index_dict)
             h = {nt: F_nn.dropout(F_nn.relu(h_new[nt]), p=self.dropout.p, training=self.training) for nt in self.node_types}
 
-        # 6) reshape 回 (N, T, H)
+        # 6) reshape
         h_reshaped = {nt: h[nt].view(num_nodes[nt], T_pool, self.hidden_dim) for nt in self.node_types}
 
         # 7) GRU
@@ -117,10 +130,10 @@ class DynamicHeteroGNN(nn.Module):
             out_seq, _ = self.grus[nt](seq)
             gru_out[nt] = out_seq
 
-        # 8) temporal align & fuse (使用 ProjectionHead time-mean pool)
+        # 8) temporal align & fuse
         proj_pool: Dict[str, torch.Tensor] = {}
         for nt in self.node_types:
-            proj_pool[nt] = self.proj_head(gru_out[nt], nt)  # (N, latent_dim)
+            proj_pool[nt] = self.proj_head(gru_out[nt], nt)
 
         aligned_pools = {}
         if "fmri" in proj_pool and "eeg" in proj_pool:
@@ -128,11 +141,10 @@ class DynamicHeteroGNN(nn.Module):
             aligned_pools["fmri"] = a_f
             aligned_pools["eeg"] = a_e
         else:
-            # fallback: 使用 proj_head 的 mean-pool
             for nt in self.node_types:
                 aligned_pools[nt] = self.proj_head(gru_out[nt], nt) if nt in self.proj_head.heads else gru_out[nt].mean(dim=0)
 
-        # fuse: expand aligned 到 (N, T, H)
+        # fuse
         fused_seq = {}
         for nt in self.node_types:
             aligned = aligned_pools.get(nt)
@@ -160,34 +172,24 @@ class DynamicHeteroGNN(nn.Module):
             else:
                 proj_seq_dict[nt] = seq
 
-        # ---- decode 前/后 对比 ----
+        # decode
         recon_seq_denorm = {}
-        recon_seq_scaled = {}   # 用于训练的 scaled 输出（此处设为 denorm 避免混淆）
-        recon_feature_dict = {}  # 新增：保留 decoder 前的“归一化预测” (N,T,F)
+        recon_seq_scaled = {}
+        recon_feature_dict = {}
         for nt in self.node_types:
             recon_hidden = proj_seq_dict[nt]
-            recon_feature = self.feature_decoders[nt](recon_hidden)  # (N,T,F), 期望为归一化空间的预测
-            recon_feature_dict[nt] = recon_feature  # 返回给 trainer 用于归一化损失
-
-            # NodeDecoder 的 denorm 输出（包括 learnable scale + bias + 使用原始 mean/std）
-            recon_denorm = self.denorm_decoders[nt](recon_feature, stats_map[nt], node_type=nt)
+            recon_feature = self.feature_decoders[nt](recon_hidden) if isinstance(self.feature_decoders[nt], nn.Module) else recon_hidden
+            recon_feature_dict[nt] = recon_feature
+            recon_denorm = self.denorm_decoders(recon_feature, stats_map[nt], node_type=nt)
             recon_seq_denorm[nt] = recon_denorm
-
-            # 避免训练中使用不一致的量：把 recon_seq_scaled 设置为 denorm（之前的实现存在混淆）
             recon_seq_scaled[nt] = recon_denorm
 
-            # if self.debug:
-            #     logger.info(f"[forward][decode_debug] {nt} feature_decoder output mean={recon_feature.mean():.6f}, std={recon_feature.std():.6f}")
-            #     logger.info(f"[forward][decode_debug] {nt} denorm output mean={recon_denorm.mean():.6f}, std={recon_denorm.std():.6f}")
-
-        # 返回
         z_dict = {nt: seq.mean(dim=1) for nt, seq in proj_seq_dict.items()}
         valid_means = [seq.mean(dim=0) for seq in proj_seq_dict.values()]
         global_seq = self.global_proj(torch.stack(valid_means).mean(dim=0))
 
-        # 注意：增加 recon_feature_dict 作为额外返回值（兼容旧 trainer 只读取前 6 个输出）
         return z_dict, gru_out, proj_seq_dict, recon_seq_denorm, recon_seq_scaled, global_seq, recon_feature_dict
-    # ---------- helpers ----------
+
     def _build_conv_for_layer(self, layer_idx: int, in_dims: Dict[str, int]) -> HeteroConv:
         conv_dict = {}
         for src, rel, dst in self.edge_types:

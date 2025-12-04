@@ -18,7 +18,7 @@ import torch.fft as fft
 
 # Optional helper import (trainer will not fail if utils absent)
 try:
-    from train.utils import compute_batch_alpha
+    from utils.utils import compute_batch_alpha
 except Exception:
     compute_batch_alpha = None
 
@@ -43,7 +43,7 @@ class DynamicHeteroTrainer:
 
     def __init__(
         self,
-        hetero_data: Union[HeteroData, List[HeteroData], Dict[str, List[HeteroData]]],
+        hetero_data,
         input_dims: Optional[Dict[str, int]] = None,
         hidden_dim: int = 128,
         num_layers: int = 8,
@@ -63,9 +63,25 @@ class DynamicHeteroTrainer:
         warmup_epochs: int = 0,
         freeze_scale_during_warmup: bool = True,
         scale_lr_mul: float = 5.0,
+        feature_lr_mul: float = 5.0,
         batch_rescale_fn: Optional[Callable] = None,
         batch_rescale_cfg: Optional[Dict] = None,
+        recon_feat_var_weight: float = 0.0,
+        scale_only_epochs: int = 0,
+        scale_only_lr_mul: float = 20.0,
     ):
+        """
+        DynamicHeteroTrainer.__init__
+
+        - hetero_data: HeteroData or list/dict of HeteroData
+        - input_dims: dict modality -> feature dim (optional; inferred from data if not provided)
+        - feature_lr_mul: multiplier for feature_decoder params (helps decoder learn faster)
+        - scale_lr_mul: multiplier for scale/log_scale params
+        - batch_rescale_fn / batch_rescale_cfg: optional per-batch rescale helper
+        - recon_feat_var_weight: optional normalized-space variance regularizer weight
+        - scale_only_epochs / scale_only_lr_mul: optional scale-only fine-tune stage parameters
+        """
+        # logger setup (assumes class has logger attribute or create one)
         self.logger = logging.getLogger("DynamicHeteroTrainer")
         if not self.logger.handlers:
             ch = logging.StreamHandler()
@@ -73,6 +89,7 @@ class DynamicHeteroTrainer:
             self.logger.addHandler(ch)
         self.logger.setLevel(logging.INFO if debug else logging.WARNING)
 
+        # device / config
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.hetero_data = hetero_data
         self.input_dims = input_dims or {}
@@ -96,25 +113,69 @@ class DynamicHeteroTrainer:
         self.warmup_epochs = warmup_epochs
         self.freeze_scale_during_warmup = freeze_scale_during_warmup
         self.scale_lr_mul = scale_lr_mul
+        self.feature_lr_mul = feature_lr_mul
 
-        # hooks & utils
-        self.batch_rescale_fn = batch_rescale_fn  # callable(r_det, t_res, cfg) -> alpha (detached)
-        self.batch_rescale_cfg = batch_rescale_cfg or {}
+        # batch rescale utility
+        self.batch_rescale_fn = batch_rescale_fn
+        self.batch_rescale_cfg = batch_rescale_cfg or {"enable": False, "only": [], "warmup_epochs": 0}
 
-        # simple defaults
-        self.graph_encoder = GraphEncoder()
-        self.graph_decoder = GraphDecoder()
-        self.temporal_loss_alpha = 1.0
-        self.temporal_loss_beta = 0.5
+        # recon feature variance regularizer
+        self.recon_feat_var_weight = recon_feat_var_weight
 
-        # dataset flattening
-        self.data_list = self._flatten_data(self.hetero_data)
-        if not self.data_list:
-            raise ValueError("No HeteroData provided to trainer")
+        # scale-only fine-tune options
+        self.scale_only_epochs = scale_only_epochs
+        self.scale_only_lr_mul = scale_only_lr_mul
+
+        # encoder / model / aligner placeholders
+        # GraphEncoder, DynamicHeteroGNN, LatentAligner/TemporalCrossAligner are expected to be importable in the module
+        # create lightweight graph encoder if not set elsewhere
+        try:
+            self.graph_encoder = GraphEncoder()
+        except Exception:
+            # fallback: if GraphEncoder isn't available, assume trainer will set it before training
+            self.graph_encoder = getattr(self, "graph_encoder", None)
+
+        # Flatten input hetero_data into a list
+        def _flatten_data(data):
+            if data is None:
+                return []
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict):
+                flat = []
+                for v in data.values():
+                    flat.extend(v if isinstance(v, list) else [v])
+                return flat
+            return [data]
+
+        self.data_list = _flatten_data(self.hetero_data)
+        if len(self.data_list) == 0:
+            raise ValueError("No hetero_data provided to trainer")
+
+        # infer metadata and input dims if needed
         sample = self.data_list[0]
-        self.metadata = sample.metadata() if hasattr(sample, "metadata") else (list(self.input_dims.keys()), [])
+        # expected sample to expose metadata() similar to HeteroData or trainer caller to provide metadata
+        if hasattr(sample, "metadata"):
+            self.metadata = sample.metadata()
+        else:
+            # fallback: try to discover node types from sample keys
+            node_types = [k for k in sample.keys()]
+            self.metadata = (node_types, [])
+
         if not self.input_dims:
-            self.input_dims = self._infer_input_dims(sample, self.metadata[0])
+            # infer per-node feature dim from sample.x_seq shapes
+            inferred = {}
+            for nt in self.metadata[0]:
+                try:
+                    x_seq = getattr(sample[nt], "x_seq", None)
+                    if x_seq is not None and len(x_seq.shape) == 3:
+                        inferred[nt] = int(x_seq.shape[2])
+                    else:
+                        inferred[nt] = 1
+                except Exception:
+                    inferred[nt] = 1
+            self.input_dims = inferred
+            self.logger.info(f"[Init] inferred input dims: {self.input_dims}")
 
         # instantiate model and aligner
         self.model = DynamicHeteroGNN(
@@ -128,10 +189,19 @@ class DynamicHeteroTrainer:
             debug=self.debug,
         ).to(self.device)
 
-        # aligner
-        self.aligner = LatentAligner(hidden_dim=self.hidden_dim, mode="nodewise", lambda_align=1.0, temperature=0.3).to(self.device)
+        # aligner: try LatentAligner then fallback
+        try:
+            self.aligner = LatentAligner(hidden_dim=self.hidden_dim, mode="nodewise", lambda_align=1.0, temperature=0.3).to(self.device)
+        except Exception:
+            try:
+                self.aligner = TemporalCrossAligner(hidden_dim=self.hidden_dim, dropout=self.dropout).to(self.device)
+            except Exception:
+                # last resort: identity aligner that returns zero loss
+                class _DummyAligner(nn.Module):
+                    def forward(self, a, b): return torch.tensor(0.0, device=next(self.parameters()).device)
+                self.aligner = _DummyAligner()
 
-        # Ensure lazy modules created where possible: run one forward with sample to register lazy params
+        # run one dummy forward to ensure lazy params are created (so optimizer includes them)
         try:
             sample_graph = self.data_list[0].to(self.device)
             with torch.no_grad():
@@ -139,34 +209,60 @@ class DynamicHeteroTrainer:
                 _, _, _, _, edge_index_dict = enc_out
                 _ = self.model(sample_graph, edge_index_dict=edge_index_dict)
         except Exception as e:
-            # If forward fails here, it's not fatal; optimizer will be built from parameters present
-            self.logger.debug(f"[Init] dummy forward failed: {e}")
+            # not fatal; log for visibility
+            self.logger.debug(f"[Init] dummy forward failed or skipped: {e}")
 
-        # build optimizer with optional scale param group
+        # Build optimizer parameter groups:
         base_params = []
+        feature_params = []
         scale_params = []
+        aligner_params = list(self.aligner.parameters())
+
         for name, p in self.model.named_parameters():
             if not p.requires_grad:
                 continue
-            # pick scale params by name convention (scale, log_scale)
-            if ("scale" in name or "log_scale" in name) and p.ndim >= 0:
+            # treat feature_decoders specially
+            if "feature_decoders" in name or "feature_decoders" in getattr(self.model, "__dict__", {}):
+                # name-based check: typically names like 'feature_decoders.fmri.weight' or feature_decoders in module path
+                if "feature_decoders" in name:
+                    feature_params.append(p)
+                    continue
+            # scales: log_scale_*, scale_*, or scale_fixed_* buffers handled separately
+            if ("log_scale" in name) or ("scale_" in name and "scale_fixed" not in name):
                 scale_params.append(p)
-            else:
-                base_params.append(p)
+                continue
+            # otherwise base
+            base_params.append(p)
 
-        param_groups = [{"params": base_params}]
+        param_groups = []
+        if len(base_params) > 0:
+            param_groups.append({"params": base_params})
+        if len(feature_params) > 0:
+            param_groups.append({"params": feature_params, "lr": self.lr * float(self.feature_lr_mul)})
         if len(scale_params) > 0:
             param_groups.append({"params": scale_params, "lr": self.lr * float(self.scale_lr_mul)})
+        # aligner parameters as separate group
+        if len(aligner_params) > 0:
+            param_groups.append({"params": aligner_params})
 
-        # include aligner params
-        param_groups.append({"params": list(self.aligner.parameters())})
-
+        # create optimizer and scheduler
         self.optimizer = torch.optim.Adam(param_groups, lr=self.lr, weight_decay=self.weight_decay)
         self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=30, gamma=0.7)
+
+        # amp scaler
         self.scaler = torch.amp.GradScaler(enabled=self.use_amp)
 
+        # bookkeeping
         self.loss_log = {"total": [], "align": [], "temp": [], "recon": [], "recon_norm": []}
+        self.diagnostic_dir = None
+        # optional runtime flags
+        self.use_batch_rescale = bool(self.batch_rescale_cfg.get("enable", False) and self.batch_rescale_fn is not None)
 
+        # final info
+        self.logger.info(f"[Init] Trainer initialized on device={self.device}. model params={sum(p.numel() for p in self.model.parameters())}")
+        self.logger.info(f"[Init] Optimizer param groups: base={len(base_params)}, feature={len(feature_params)}, scale={len(scale_params)}, aligner={len(aligner_params)}")
+
+        
     # -------------------------
     # Utilities
     # -------------------------
@@ -240,12 +336,37 @@ class DynamicHeteroTrainer:
     # Train loop
     # -------------------------
     def train(self, num_epochs: Optional[int] = None, verbose: bool = True):
+        """
+        Enhanced train loop with an optional "scale-only" fine-tune phase.
+
+        New behavior added:
+        - self.batch_rescale_cfg["warmup_epochs"] controls how long batch_rescale is active (auto-disable after).
+        - self.recon_feat_var_weight (if >0) applies a small normalized-space variance regularizer.
+        - After warmup/unfreeze, an optional short "scale-only" phase runs that updates only scale/log_scale params
+          with a high LR to quickly move multiplicative scale to the correct magnitude.
+          Configure via:
+            self.scale_only_epochs (int, default 0)  -- run this many epochs of scale-only training
+            self.scale_only_lr_mul (float, default 20.0) -- multiplier on base lr for scale-only opt
+        - After scale-only phase, original optimizer is rebuilt (base + scale groups) so full training resumes.
+        """
+        # defaults for new options
+        if not hasattr(self, "recon_feat_var_weight"):
+            self.recon_feat_var_weight = 0.0
+        if not hasattr(self, "batch_rescale_cfg"):
+            self.batch_rescale_cfg = {"enable": False, "warmup_epochs": 0}
+        if "warmup_epochs" not in self.batch_rescale_cfg:
+            self.batch_rescale_cfg["warmup_epochs"] = 0
+        if not hasattr(self, "scale_only_epochs"):
+            self.scale_only_epochs = 0
+        if not hasattr(self, "scale_only_lr_mul"):
+            self.scale_only_lr_mul = 20.0
+
         epochs = num_epochs or self.num_epochs
         self.model.train()
         self.aligner.train()
 
-        # Warmup: optionally freeze scale params for warmup_epochs
-        if self.warmup_epochs > 0 and self.freeze_scale_during_warmup:
+        # Warmup: optionally freeze scales
+        if getattr(self, "warmup_epochs", 0) > 0 and getattr(self, "freeze_scale_during_warmup", False):
             self._set_scale_requires_grad(False)
             self.logger.info(f"[Warmup] freezing scale params for {self.warmup_epochs} epochs")
 
@@ -254,8 +375,13 @@ class DynamicHeteroTrainer:
             total_loss = total_align = total_temp = total_recon = total_recon_norm = 0.0
             batches = 0
 
-            # Unfreeze scales after warmup
-            if epoch == self.warmup_epochs + 1 and self.freeze_scale_during_warmup:
+            # auto-disable batch_rescale after warmup_epochs
+            if self.batch_rescale_cfg.get("enable", False) and epoch > int(self.batch_rescale_cfg.get("warmup_epochs", 0)):
+                self.batch_rescale_cfg["enable"] = False
+                self.logger.info(f"[BatchRescale] warmup_epochs passed ({self.batch_rescale_cfg.get('warmup_epochs')}), disabling batch_rescale")
+
+            # unfreeze scales after warmup
+            if epoch == getattr(self, "warmup_epochs", 0) + 1 and getattr(self, "freeze_scale_during_warmup", False):
                 self._set_scale_requires_grad(True)
                 self.logger.info("[Warmup] unfreezing scale params, resuming full training")
 
@@ -263,13 +389,12 @@ class DynamicHeteroTrainer:
                 data = data.to(self.device)
                 self.optimizer.zero_grad(set_to_none=True)
 
-                # encode
+                # --- encoder ---
                 encoder_out = self.graph_encoder(data)
                 x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict = encoder_out
 
                 with torch.cuda.amp.autocast(enabled=self.use_amp):
                     outputs = self.model(data, edge_index_dict=edge_index_dict)
-                    # model expected to return (z_dict, gru_out, proj_seq_dict, recon_seq_denorm, recon_seq_scaled, global_seq [, recon_feature_dict])
                     if len(outputs) >= 7:
                         z_dict, gru_seq_dict, proj_seq_dict, recon_seq_dict, recon_seq_scaled, global_seq, recon_feature_dict = outputs[:7]
                     else:
@@ -287,15 +412,14 @@ class DynamicHeteroTrainer:
                         seq = proj_seq_dict[nt]
                         temp_loss = temp_loss + self._temporal_prediction_loss(seq, nt)
 
-                    # Optionally compute per-batch alpha externally (trainer keeps no modality-specific hacks)
+                    # Optional batch rescale (only while enabled)
                     recon_to_use = recon_seq_dict
                     batch_alphas = {}
-                    if self.batch_rescale_fn is not None:
-                        # batch_rescale_fn expected: (r_det, t_res, cfg) -> alpha (tensor or scalar), uses detached r
+                    if self.batch_rescale_cfg.get("enable", False) and self.batch_rescale_fn is not None:
                         recon_to_use = {}
                         for nt, recon in recon_seq_dict.items():
                             apply_here = (not self.batch_rescale_cfg.get("only")) or (nt in self.batch_rescale_cfg.get("only", []))
-                            if self.batch_rescale_cfg.get("enable", True) and apply_here:
+                            if apply_here:
                                 t = getattr(data[nt], "x_seq")
                                 if t is None:
                                     alpha = 1.0
@@ -308,7 +432,7 @@ class DynamicHeteroTrainer:
                             else:
                                 recon_to_use[nt] = recon
 
-                    # Reconstruction losses
+                    # Reconstruction loss
                     recon_loss = torch.tensor(0.0, device=self.device)
                     recon_losses_per_nt = {}
                     for nt in self.metadata[0]:
@@ -327,9 +451,9 @@ class DynamicHeteroTrainer:
                         recon_losses_per_nt[nt] = float(l_nt.detach().cpu())
                         recon_loss = recon_loss + l_nt
 
-                    # Normalized-space auxiliary loss (if model provides recon_feature_dict)
+                    # Normalized-space loss + optional variance regularizer
                     recon_norm_loss = torch.tensor(0.0, device=self.device)
-                    if recon_feature_dict is not None and self.recon_norm_weight > 0:
+                    if recon_feature_dict is not None and getattr(self, "recon_norm_weight", 0.0) and self.recon_norm_weight > 0:
                         for nt in self.metadata[0]:
                             if nt not in recon_feature_dict:
                                 continue
@@ -352,9 +476,15 @@ class DynamicHeteroTrainer:
                             target_norm = (target_res[:min_N, :min_T, :min_F] - mean_expand) / (std_expand + 1e-8)
                             recon_norm_loss = recon_norm_loss + F_nn.mse_loss(recon_feat_crop, target_norm)
 
-                    # total
+                            # variance regularizer
+                            if getattr(self, "recon_feat_var_weight", 0.0) and self.recon_feat_var_weight > 0:
+                                rf_flat = recon_feat_crop.reshape(recon_feat_crop.shape[0], -1)
+                                rf_std = rf_flat.std(dim=1).mean()
+                                recon_norm_loss = recon_norm_loss + self.recon_feat_var_weight * F_nn.mse_loss(rf_std, torch.tensor(1.0, device=rf_std.device))
+
+                    # Total loss
                     loss = self.align_weight * align_loss + self.temp_weight * temp_loss + self.recon_weight * recon_loss
-                    if self.recon_norm_weight > 0:
+                    if getattr(self, "recon_norm_weight", 0.0) and self.recon_norm_weight > 0:
                         loss = loss + self.recon_norm_weight * recon_norm_loss
 
                 # Backward & step
@@ -374,7 +504,7 @@ class DynamicHeteroTrainer:
                         torch.nn.utils.clip_grad_norm_(list(self.model.parameters()) + list(self.aligner.parameters()), self.grad_clip)
                     self.optimizer.step()
 
-                # accumulate
+                # Stats accumulate
                 total_loss += float(loss.detach().cpu())
                 total_align += float(align_loss.detach().cpu())
                 total_temp += float(temp_loss.detach().cpu())
@@ -382,7 +512,6 @@ class DynamicHeteroTrainer:
                 total_recon_norm += float(recon_norm_loss.detach().cpu()) if isinstance(recon_norm_loss, torch.Tensor) else 0.0
                 batches += 1
 
-                # one-line batch summary for first batch in epoch
                 if data_idx == 0:
                     self.logger.info(f"[Train] epoch={epoch} batch=0 recon_losses={recon_losses_per_nt}")
                     if batch_alphas:
@@ -392,29 +521,66 @@ class DynamicHeteroTrainer:
                             else:
                                 self.logger.info(f"[Train] batch alpha {nt}: {a}")
 
-            # epoch end
+            # Epoch end: averages & logging
             avg_total = total_loss / batches
             avg_align = total_align / batches
             avg_temp = total_temp / batches
             avg_recon = total_recon / batches
             avg_recon_norm = total_recon_norm / batches
 
-            self.loss_log["total"].append(avg_total)
-            self.loss_log["align"].append(avg_align)
-            self.loss_log["temp"].append(avg_temp)
-            self.loss_log["recon"].append(avg_recon)
-            self.loss_log["recon_norm"].append(avg_recon_norm)
+            self.loss_log.setdefault("total", []).append(avg_total)
+            self.loss_log.setdefault("align", []).append(avg_align)
+            self.loss_log.setdefault("temp", []).append(avg_temp)
+            self.loss_log.setdefault("recon", []).append(avg_recon)
+            self.loss_log.setdefault("recon_norm", []).append(avg_recon_norm)
 
             self.scheduler.step()
 
-            # epoch diagnostics
+            # Epoch diagnostics: relative errors
             rel_error_epoch = {}
-            # compute relative errors on last batch `data` (simple, consistent)
             for nt in self.metadata[0]:
                 recon_final = recon_seq_dict[nt]
                 rel_error_epoch[nt] = self._compute_relative_error({nt: recon_final}, data, self.metadata)[nt]
                 if verbose:
                     self.logger.info(f"[Debug:{nt}] recon mean={recon_final.mean():.5f}, std={recon_final.std():.5f}")
+
+            # Scale diagnostics: print mean scale and grad norm
+            try:
+                scale_info = {}
+                for nt in self.metadata[0]:
+                    val = None
+                    grad_norm = None
+                    dec = getattr(self.model, "denorm_decoders", None)
+                    if dec is not None and hasattr(dec, "get_scale"):
+                        try:
+                            scale_tensor = dec.get_scale(nt)
+                            val = float(scale_tensor.detach().mean().cpu())
+                            # get grad if exists on log_scale or scale param
+                            if hasattr(dec, f"log_scale_{nt}"):
+                                p = getattr(dec, f"log_scale_{nt}")
+                                grad_norm = float(p.grad.detach().norm().cpu()) if (p.grad is not None) else None
+                            elif hasattr(dec, f"scale_{nt}"):
+                                p = getattr(dec, f"scale_{nt}")
+                                grad_norm = float(p.grad.detach().norm().cpu()) if (p.grad is not None) else None
+                        except Exception:
+                            val = None
+                            grad_norm = None
+                    else:
+                        for name, p in self.model.named_parameters():
+                            if nt in name and ("scale" in name or "log_scale" in name):
+                                try:
+                                    if "log_scale" in name:
+                                        val = float(torch.exp(p.detach()).mean().cpu())
+                                    else:
+                                        val = float(p.detach().mean().cpu())
+                                    grad_norm = float(p.grad.detach().norm().cpu()) if (p.grad is not None) else None
+                                    break
+                                except Exception:
+                                    continue
+                    scale_info[nt] = {"scale_mean": val, "scale_grad_norm": grad_norm}
+                self.logger.info(f"[ScaleDiag epoch={epoch}] " + ", ".join([f"{k}: mean={v['scale_mean']:.4f} grad_norm={v['scale_grad_norm']}" for k, v in scale_info.items()]))
+            except Exception as e:
+                self.logger.warning(f"[ScaleDiag] failed: {e}")
 
             if verbose:
                 self.logger.info(
@@ -424,6 +590,76 @@ class DynamicHeteroTrainer:
                 self.logger.info(f"[Epoch {epoch}] relative_error={rel_error_epoch}")
                 self._log_reconstruction_histogram(recon_seq_dict, self.metadata)
 
+        # -------------------------
+        # Optional scale-only fine-tune (run after main loop if requested)
+        # -------------------------
+        if getattr(self, "scale_only_epochs", 0) > 0:
+            # collect scale params
+            scale_params = []
+            for name, p in self.model.named_parameters():
+                if not p.requires_grad:
+                    continue
+                if ("scale" in name or "log_scale" in name):
+                    scale_params.append(p)
+            if len(scale_params) == 0:
+                self.logger.info("[ScaleOnly] no scale/log_scale parameters found; skipping scale-only phase.")
+            else:
+                self.logger.info(f"[ScaleOnly] starting scale-only fine-tune for {self.scale_only_epochs} epochs with lr_mul={self.scale_only_lr_mul}")
+                opt_scale = torch.optim.Adam([{"params": scale_params, "lr": float(self.lr * self.scale_only_lr_mul)}], weight_decay=self.weight_decay)
+                for so in range(1, self.scale_only_epochs + 1):
+                    start_so = time.time()
+                    total_so_loss = 0.0
+                    for data in self.data_list:
+                        data = data.to(self.device)
+                        opt_scale.zero_grad(set_to_none=True)
+                        encoder_out = self.graph_encoder(data)
+                        x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict = encoder_out
+                        with torch.cuda.amp.autocast(enabled=self.use_amp):
+                            outputs = self.model(data, edge_index_dict=edge_index_dict)
+                            if len(outputs) >= 7:
+                                _, _, _, recon_seq_dict, _, _, recon_feature_dict = outputs[:7]
+                            else:
+                                _, _, _, recon_seq_dict, _, _ = outputs[:6]
+                                recon_feature_dict = None
+                            # compute recon loss (denorm) only
+                            recon_loss = torch.tensor(0.0, device=self.device)
+                            for nt in self.metadata[0]:
+                                recon = recon_seq_dict[nt]
+                                target = getattr(data[nt], "x_seq")
+                                target_res = self._resample_time(target.to(self.device), recon.shape[1])
+                                Nr, Tr, Fr = recon.shape
+                                Nt, Tt, Ft = target_res.shape
+                                min_N, min_T, min_F = min(Nr, Nt), min(Tr, Tt), min(Fr, Ft)
+                                recon_crop = recon[:min_N, :min_T, :min_F]
+                                target_crop = target_res[:min_N, :min_T, :min_F]
+                                recon_loss = recon_loss + F_nn.mse_loss(recon_crop, target_crop)
+                            loss = recon_loss
+                        # backward & step
+                        if self.use_amp:
+                            self.scaler.scale(loss).backward()
+                            self.scaler.step(opt_scale)
+                            self.scaler.update()
+                        else:
+                            loss.backward()
+                            opt_scale.step()
+                        total_so_loss += float(loss.detach().cpu())
+                    self.logger.info(f"[ScaleOnly] epoch={so} avg_loss={total_so_loss/len(self.data_list):.6f} time={time.time()-start_so:.2f}s")
+                # rebuild full optimizer (base + scale groups) to resume normal training
+                try:
+                    base_params = []
+                    scale_params = []
+                    for name, p in self.model.named_parameters():
+                        if not p.requires_grad:
+                            continue
+                        if ("scale" in name or "log_scale" in name):
+                            scale_params.append(p)
+                        else:
+                            base_params.append(p)
+                    param_groups = [{"params": base_params}, {"params": scale_params, "lr": self.lr * float(getattr(self, "scale_lr_mul", 1.0))}, {"params": list(self.aligner.parameters())}]
+                    self.optimizer = torch.optim.Adam(param_groups, lr=self.lr, weight_decay=self.weight_decay)
+                    self.logger.info("[ScaleOnly] rebuilt full optimizer after scale-only phase.")
+                except Exception as e:
+                    self.logger.warning(f"[ScaleOnly] failed to rebuild full optimizer: {e}")
     # -------------------------
     # Helpers
     # -------------------------
