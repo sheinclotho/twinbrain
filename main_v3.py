@@ -148,6 +148,7 @@ def main():
             logging.error("[Train] Saved debug summary; skipping subject.")
             continue
 
+        trainer.use_batch_rescale = True
         trainer.diagnostic_dir = str(result_dir / "diagnostics")
         os.makedirs(trainer.diagnostic_dir, exist_ok=True)
 
