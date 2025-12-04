@@ -2,6 +2,7 @@
 import nibabel as nib
 import numpy as np
 import json
+import os
 from nilearn import image
 from nilearn.input_data import NiftiLabelsMasker
 from pathlib import Path
@@ -11,6 +12,7 @@ from preprocess.fmri_preprocessor import FMRI_Preprocessor
 import xml.etree.ElementTree as ET
 import logging
 from sklearn.cluster import KMeans
+from typing import Optional
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
@@ -87,7 +89,9 @@ class BIDSMapper:
             raise ValueError("Unsupported atlas: choose 'schaefer' or 'aal'")
         logging.info(f"[Atlas] Loaded '{self.atlas_name}' with {len(self.labels)} regions.")
 
-    def load_and_preprocess(self, fmri_file=None, confounds_file=None, standardize=True):
+    def load_and_preprocess(self, fmri_file=None, confounds_file=None, standardize=True, 
+                            edge_template_path: Optional[str] = "F:/digital_twin_brain/templates/eeg_200nodes_edgeindex.npy"):
+
         fmri_file = fmri_file or self.fmri_file
         confounds_file = confounds_file or self.confounds_file
         if fmri_file is None:
@@ -126,6 +130,7 @@ class BIDSMapper:
         logging.info(f"[fMRI] Active nodes: {int(np.sum(self.node_mask))}/{len(self.node_mask)}")
         logging.info(f"[fMRI] Time vector: {n_timepoints} points, TR={tr}s, total={n_timepoints*tr:.1f}s")
 
+        # --------------------------- 边生成逻辑 ---------------------------
         try:
             fc = np.corrcoef(self.data)
             fc = fc.astype(np.float32)
@@ -133,13 +138,31 @@ class BIDSMapper:
             n = fc.shape[0]
             if n <= 1:
                 raise RuntimeError("Not enough nodes.")
-            thr = np.percentile(np.abs(fc[np.triu_indices(n, k=1)]), 90)
-            mask = (np.abs(fc) >= thr)
-            np.fill_diagonal(mask, 0)
-            edge_index = np.array(np.nonzero(mask))
-            self.edge_index = edge_index
-            self.edge_attr = np.abs(fc[edge_index[0], edge_index[1]]).astype(np.float32)
-            logging.info(f"[Graph] Built {self.edge_index.shape[1]} edges (thr={thr:.4f})")
+
+            # 模板路径存在 -> 直接加载模板
+            if edge_template_path is not None and os.path.exists(edge_template_path):
+                logging.info(f"[Graph] Loading edge template from {edge_template_path}")
+                template = np.load(edge_template_path, allow_pickle=True).item()
+                self.edge_index = template["edge_index"]
+                self.edge_attr = np.abs(fc[self.edge_index[0], self.edge_index[1]]).astype(np.float32)
+                logging.info(f"[Graph] Loaded template edge_index shape={self.edge_index.shape}")
+
+            else:
+                # 原始阈值生成
+                thr = np.percentile(np.abs(fc[np.triu_indices(n, k=1)]), 90)
+                mask = (np.abs(fc) >= thr)
+                np.fill_diagonal(mask, 0)
+                edge_index = np.array(np.nonzero(mask))
+                self.edge_index = edge_index
+                self.edge_attr = np.abs(fc[edge_index[0], edge_index[1]]).astype(np.float32)
+                logging.info(f"[Graph] Built {self.edge_index.shape[1]} edges (thr={thr:.4f})")
+
+                # 如果提供了模板路径但文件不存在 -> 保存模板
+                if edge_template_path is not None:
+                    logging.info(f"[Graph] Saving edge template to {edge_template_path}")
+                    np.save(edge_template_path, {"edge_index": self.edge_index})
+                    logging.info(f"[Graph] Template saved")
+
         except Exception as e:
             logging.warning(f"[Graph] Failed to build edge_index: {e}")
             self.edge_index = np.zeros((2, 0), dtype=int)

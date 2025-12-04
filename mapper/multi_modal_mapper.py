@@ -245,12 +245,38 @@ class MultiModalMapper:
         pos = on_info["pos"] if on_info["pos"] is not None else off_info["pos"]
         return {"x_seq": x_cat, "edge_index": edge_index, "pos": pos}
 
-    def _add_cross_modal_edges(self, fmri_pos: torch.Tensor, eeg_pos: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _add_cross_modal_edges(
+        self,
+        fmri_pos: torch.Tensor,
+        eeg_pos: torch.Tensor,
+        template_path: Optional[str] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        import os
+        import torch
+
+        # 如果提供路径且文件存在，直接加载模板（只加载 edge_index）
+        if template_path is not None and os.path.exists(template_path):
+            saved = torch.load(template_path)
+            edge_index = saved['edge_index']
+            self._log(f"[CM] Loaded cross-modal edge template from {template_path}")
+
+            # attr 仍然按照距离计算
+            if fmri_pos is None or eeg_pos is None or edge_index.numel() == 0:
+                edge_attr = torch.empty((0,), dtype=torch.float32)
+            else:
+                src, dst = edge_index
+                dist = torch.cdist(fmri_pos, eeg_pos)
+                edge_attr = 1.0 / (dist[src, dst] + 1e-6)
+            return edge_index, edge_attr
+
+        # 没有模板或不提供路径，按原逻辑生成
         if fmri_pos is None or eeg_pos is None:
             return torch.empty((2, 0), dtype=torch.long), torch.empty((0,), dtype=torch.float32)
+
         dist = torch.cdist(fmri_pos, eeg_pos)
         edge_index_list = []
         edge_attr_list = []
+
         for i in range(fmri_pos.shape[0]):
             d = dist[i]
             if self.cross_modal_k > 0:
@@ -263,10 +289,20 @@ class MultiModalMapper:
             dst = idx
             edge_index_list.append(torch.stack([src, dst]))
             edge_attr_list.append(1.0 / (d[idx] + 1e-6))
+
         if not edge_index_list:
-            return torch.empty((2, 0), dtype=torch.long), torch.empty((0,), dtype=torch.float32)
-        edge_index = torch.cat(edge_index_list, dim=1)
-        edge_attr = torch.cat(edge_attr_list)
+            edge_index = torch.empty((2, 0), dtype=torch.long)
+            edge_attr = torch.empty((0,), dtype=torch.float32)
+        else:
+            edge_index = torch.cat(edge_index_list, dim=1)
+            edge_attr = torch.cat(edge_attr_list)
+
+        # 保存模板时只保存 edge_index
+        if template_path is not None:
+            os.makedirs(os.path.dirname(template_path), exist_ok=True)
+            torch.save({'edge_index': edge_index}, template_path)
+            self._log(f"[CM] Saved cross-modal edge template to {template_path}")
+
         return edge_index, edge_attr
 
     def build_dynamic_from_graphs(
@@ -341,8 +377,20 @@ class MultiModalMapper:
                         combined[ntype].x = combined[ntype].x_seq.mean(dim=1)
 
         return [combined]
+
     def _construct_hetero(self, fmri_info: Any, eeg_info: Any, on_graph: Any) -> HeteroData:
+        """
+        Robust HeteroData constructor.
+        - Enforces fixed relation order (REL_ORDER)
+        - Always writes all four relations (even if empty)
+        - edge_index can come from fmri_info/eeg_info/on_graph (templates)
+        - edge_attr always computed dynamically from fc/dist and returned as 1D float32 tensors
+        """
         from torch_geometric.data import HeteroData
+        import numpy as np
+        import torch
+        import os
+
         data = HeteroData()
 
         def _check_ntf(x: Any, name: str) -> torch.Tensor:
@@ -393,148 +441,169 @@ class MultiModalMapper:
             data["eeg"].pos = pos
             self._log(f"[EEG] pos shape = {tuple(pos.shape)}")
 
-        # ---------------------------------------------------------------------
-        # fMRI edges
-        # ---------------------------------------------------------------------
-        self._log("[fMRI] 尝试读取 edge_index")
-        ei_f = fmri_info.get("edge_index")
+        # ------------------------------------------------------------
+        # Helper: read edge_index candidates from info/on_graph
+        # ------------------------------------------------------------
+        def _read_edge_index_from_info(info_obj, et_key_candidates):
+            """
+            Try to extract edge_index tensor from info_obj given list of keys.
+            Return (edge_index_tensor or None, source_desc or None)
+            """
+            if info_obj is None:
+                return None, None
+            # If info_obj is HeteroData, prefer direct access
+            try:
+                if hasattr(info_obj, "edge_types"):
+                    for et in info_obj.edge_types:
+                        if (et[0], et[1], et[2]) in et_key_candidates:
+                            obj = info_obj[et]
+                            if hasattr(obj, "edge_index") and obj.edge_index is not None and obj.edge_index.numel() > 0:
+                                return obj.edge_index.clone(), f"heterodata[{et}]"
+            except Exception:
+                pass
+            # If dict-like, try keys
+            if isinstance(info_obj, dict):
+                for key in et_key_candidates:
+                    if key in info_obj and info_obj[key] is not None:
+                        cand = info_obj[key]
+                        if hasattr(cand, "edge_index"):
+                            cand = cand.edge_index
+                        if isinstance(cand, np.ndarray):
+                            cand = torch.from_numpy(cand).long()
+                        if isinstance(cand, torch.Tensor) and cand.numel() > 0:
+                            return cand.clone(), f"dict[{key}]"
+            return None, None
 
-        if ei_f is not None:
-            self._log(f"[fMRI] 输入 edge_index shape = {tuple(ei_f.shape)}  num_edges={ei_f.shape[1]}")
+        # ------------------------------------------------------------
+        # Determine edge_index candidates (priority: fmri_info/eeg_info -> on_graph)
+        # ------------------------------------------------------------
+        # fMRI
+        ei_f, ei_f_src = None, None
+        if "edge_index" in fmri_info and fmri_info["edge_index"] is not None:
+            ei_f = fmri_info["edge_index"]
+            if isinstance(ei_f, np.ndarray):
+                ei_f = torch.from_numpy(ei_f).long()
+            ei_f_src = "fmri_info['edge_index']"
         else:
-            self._log("[fMRI] 输入 edge_index is None")
+            # try on_graph fallback
+            ei_f, ei_f_src = _read_edge_index_from_info(on_graph, [( "fmri","connects","fmri")])
 
-        if ei_f is not None and ei_f.numel() > 0:
-            data[("fmri", "connects", "fmri")].edge_index = ei_f
-            self._log("[fMRI] 写入 HeteroData -- edge_type ('fmri','connects','fmri')")
-            self._log(f"[fMRI] 实际写入 edge_index = {tuple(ei_f.shape)}")
-
-            if fmri_info.get("fc_matrix") is not None:
-                src, dst = ei_f[0], ei_f[1]
-                edge_attr = torch.tensor(
-                    fmri_info["fc_matrix"][src, dst], dtype=torch.float32
-                )
-                data[("fmri", "connects", "fmri")].edge_attr = edge_attr
-                self._log(f"[fMRI] 写入 edge_attr shape = {tuple(edge_attr.shape)}")
+        # EEG
+        ei_e, ei_e_src = None, None
+        if isinstance(eeg_info, dict) and "edge_index" in eeg_info and eeg_info["edge_index"] is not None:
+            ei_e = eeg_info["edge_index"]
+            if isinstance(ei_e, np.ndarray):
+                ei_e = torch.from_numpy(ei_e).long()
+            ei_e_src = "eeg_info['edge_index']"
         else:
-            self._log("[fMRI] 不写入 edge_index（为空）")
+            ei_e, ei_e_src = _read_edge_index_from_info(on_graph, [("eeg","connects","eeg")])
 
-        # ---------------------------------------------------------------------
-        # EEG edges
-        # ---------------------------------------------------------------------
-        # --- 原来的 EEG 边处理（替换为下面更稳健的实现） ---
-        self._log("[EEG] 尝试读取 edge_index")
+        # ------------------------------------------------------------
+        # Prepare FC matrices (ensure numpy for indexing convenience)
+        # ------------------------------------------------------------
+        fmri_fc = None
+        if fmri_info.get("fc_matrix") is not None:
+            fmri_fc = np.asarray(fmri_info["fc_matrix"], dtype=np.float32)
+        elif hasattr(on_graph, "fc_matrix") and on_graph.fc_matrix is not None:
+            fmri_fc = np.asarray(on_graph.fc_matrix, dtype=np.float32)
 
-        ei_e = None
-        # 1) 如果 eeg_info 是 HeteroData，优先从 edge_types 列表读取
-        if hasattr(eeg_info, "edge_types"):
-            if ("eeg", "connects", "eeg") in getattr(eeg_info, "edge_types", []):
-                # 直接安全获取对象并检查
-                try:
-                    obj = eeg_info[("eeg", "connects", "eeg")]
-                    if hasattr(obj, "edge_index") and obj.edge_index is not None and obj.edge_index.numel() > 0:
-                        ei_e = obj.edge_index.clone()
-                        ei_src = "eeg_info[('eeg','connects','eeg')]"
-                        self._log(f"[EEG] Found eeg internal edges in eeg_info via edge_types: {tuple(ei_e.shape)}")
-                except Exception as e:
-                    self._log(f"[EEG] Failed to read eeg_info[('eeg','connects','eeg')]: {e}", level="warning")
-            else:
-                # Debug 输出，明确告诉你 edge_types 列表里到底有什么
-                self._log(f"[EEG] eeg_info.edge_types does not contain ('eeg','connects','eeg'): {getattr(eeg_info, 'edge_types', None)}", level="debug")
+        eeg_fc = None
+        if isinstance(eeg_info, dict) and eeg_info.get("fc_matrix") is not None:
+            eeg_fc = np.asarray(eeg_info["fc_matrix"], dtype=np.float32)
+        elif hasattr(on_graph, "fc_matrix") and on_graph.fc_matrix is not None:
+            eeg_fc = np.asarray(on_graph.fc_matrix, dtype=np.float32)
 
-        # 2) 尝试从可能的 dict-like eeg_merged 中拷贝（优先级高于 on_graph）
-        if ei_e is None and isinstance(eeg_merged, dict):
-            for key in [("eeg","connects","eeg"), "edge_index", "eeg_edge_index"]:
-                if key in eeg_merged and eeg_merged[key] is not None:
-                    cand = eeg_merged[key]
-                    if hasattr(cand, "edge_index"):
-                        cand = cand.edge_index
-                    if isinstance(cand, np.ndarray):
-                        cand = torch.from_numpy(cand).long()
-                    if isinstance(cand, torch.Tensor) and cand.numel() > 0:
-                        ei_e = cand.clone()
-                        ei_src = f"eeg_merged[{key}]"
-                        self._log(f"[EEG] Copied edge_index from eeg_merged key={key} -> {tuple(ei_e.shape)}")
-                        break
-
-        # 3) 尝试从 on_graph（HeteroData）中找到任何以 eeg->eeg 的 edge_type 并拷贝
-        if ei_e is None and hasattr(on_graph, "edge_types"):
-            for et in on_graph.edge_types:
-                if et[0] == "eeg" and et[2] == "eeg":
-                    obj = on_graph[et]
-                    if hasattr(obj, "edge_index") and obj.edge_index is not None and obj.edge_index.numel() > 0:
-                        ei_e = obj.edge_index.clone()
-                        ei_src = f"on_graph edge_type={et}"
-                        self._log(f"[EEG] Copied edge_index from on_graph {et} -> {tuple(ei_e.shape)}")
-                        # copy edge_attr if present
-                        attr = getattr(obj, "edge_attr", None)
-                        if attr is not None:
-                            tmp_attr = attr.clone()
-                        else:
-                            tmp_attr = None
-                        break
-
-        # 4) 最终注入到 data（如果找到）
-        if ei_e is not None and ei_e.numel() > 0:
-            data[("eeg", "connects", "eeg")].edge_index = ei_e
-            # 优先使用已有的 tmp_attr（来自 on_graph），否则尝试从 on_graph.fc_matrix 生成
-            if 'tmp_attr' in locals() and tmp_attr is not None:
-                data[("eeg", "connects", "eeg")].edge_attr = tmp_attr
-                self._log(f"[EEG] Wrote edge_attr from source {ei_src}: {tuple(tmp_attr.shape)}")
-            else:
-                if getattr(on_graph, "fc_matrix", None) is not None:
-                    src_idx, dst_idx = ei_e[0], ei_e[1]
-                    data[("eeg", "connects", "eeg")].edge_attr = torch.tensor(on_graph.fc_matrix[src_idx, dst_idx], dtype=torch.float32)
-                    self._log(f"[EEG] Generated edge_attr from on_graph.fc_matrix for source {ei_src}")
-            self._log(f"[EEG] 写入 HeteroData -- edge_type ('eeg','connects','eeg') from {ei_src}")
-        else:
-            self._log("[EEG] No eeg internal edge_index found after exhaustive checks", level="warning")
-
-
-        # ---------------------------------------------------------------------
-        # Cross modal edges
-        # ---------------------------------------------------------------------
-        self._log("[CM] 开始构建跨模态边")
-
+        # ------------------------------------------------------------
+        # Cross-modal positions
+        # ------------------------------------------------------------
         fmri_pos = data["fmri"].pos if hasattr(data["fmri"], "pos") else None
         eeg_pos = data["eeg"].pos if hasattr(data["eeg"], "pos") else None
 
+        # ------------------------------------------------------------
+        # Fixed relation order (enforced)
+        # ------------------------------------------------------------
+        REL_ORDER = [
+            ("fmri", "connects", "fmri"),
+            ("eeg", "connects", "eeg"),
+            ("fmri", "projects_to", "eeg"),
+            ("eeg", "projects_to", "fmri"),
+        ]
+
+        # ------------------------------------------------------------
+        # 1) fmri -> fmri
+        # ------------------------------------------------------------
+        if ei_f is not None and isinstance(ei_f, torch.Tensor) and ei_f.numel() > 0:
+            data[("fmri","connects","fmri")].edge_index = ei_f.long()
+            # compute edge_attr from fmri_fc if available
+            if fmri_fc is not None:
+                src_np = ei_f[0].cpu().numpy().astype(int)
+                dst_np = ei_f[1].cpu().numpy().astype(int)
+                vals = fmri_fc[src_np, dst_np]
+                data[("fmri","connects","fmri")].edge_attr = torch.from_numpy(np.asarray(vals, dtype=np.float32))
+                self._log(f"[fMRI] Wrote edge_attr from {ei_f_src or 'fmri_fc'} shape={data[('fmri','connects','fmri')].edge_attr.shape}")
+            else:
+                data[("fmri","connects","fmri")].edge_attr = torch.empty((ei_f.size(1),), dtype=torch.float32)
+        else:
+            data[("fmri","connects","fmri")].edge_index = torch.zeros((2,0), dtype=torch.long)
+            data[("fmri","connects","fmri")].edge_attr = torch.empty((0,), dtype=torch.float32)
+            self._log("[fMRI] No fmri edges written (empty)")
+
+        # ------------------------------------------------------------
+        # 2) eeg -> eeg
+        # ------------------------------------------------------------
+        if ei_e is not None and isinstance(ei_e, torch.Tensor) and ei_e.numel() > 0:
+            data[("eeg","connects","eeg")].edge_index = ei_e.long()
+            if eeg_fc is not None:
+                src_np = ei_e[0].cpu().numpy().astype(int)
+                dst_np = ei_e[1].cpu().numpy().astype(int)
+                vals = eeg_fc[src_np, dst_np]
+                data[("eeg","connects","eeg")].edge_attr = torch.from_numpy(np.asarray(vals, dtype=np.float32))
+                self._log(f"[EEG] Wrote edge_attr from {ei_e_src or 'eeg_fc'} shape={data[('eeg','connects','eeg')].edge_attr.shape}")
+            else:
+                data[("eeg","connects","eeg")].edge_attr = torch.empty((ei_e.size(1),), dtype=torch.float32)
+        else:
+            data[("eeg","connects","eeg")].edge_index = torch.zeros((2,0), dtype=torch.long)
+            data[("eeg","connects","eeg")].edge_attr = torch.empty((0,), dtype=torch.float32)
+            self._log("[EEG] No eeg edges written (empty)")
+
+        # ------------------------------------------------------------
+        # 3) cross-modal: use self._add_cross_modal_edges (which may accept template_path)
+        # ------------------------------------------------------------
         cross_ei, cross_attr = self._add_cross_modal_edges(fmri_pos, eeg_pos)
 
-        self._log(f"[CM] cross_ei shape = {tuple(cross_ei.shape)}  num_edges={cross_ei.shape[1]}")
-
-        if cross_ei.numel() > 0:
+        if cross_ei is not None and cross_ei.numel() > 0:
             # forward
-            data[("fmri", "projects_to", "eeg")].edge_index = cross_ei
-            data[("fmri", "projects_to", "eeg")].edge_attr = cross_attr
-            self._log("[CM] 写入 forward ('fmri','projects_to','eeg')")
-
-            # reverse
-            rev_ei = cross_ei[[1, 0]]
-            data[("eeg", "projects_to", "fmri")].edge_index = rev_ei
-            data[("eeg", "projects_to", "fmri")].edge_attr = cross_attr
-            self._log("[CM] 写入 reverse ('eeg','projects_to','fmri')")
-            self._log(f"[CM] rev_ei shape = {tuple(rev_ei.shape)}")
-        else:
-            self._log("[CM] 未添加跨模态边")
-
-        # ---------------------------------------------------------------------
-        # Summary over edge_index_dict
-        # ---------------------------------------------------------------------
-        self._log("[SUMMARY] 开始记录 edge_index_dict")
-
-        data.edge_index_dict = {}
-        for et in data.edge_types:
-            obj = data[et]
-            if hasattr(obj, "edge_index") and obj.edge_index is not None:
-                data.edge_index_dict[et] = obj.edge_index
-                self._log(f"[SUMMARY] {et}: edge_index = {tuple(obj.edge_index.shape)}")
+            data[("fmri","projects_to","eeg")].edge_index = cross_ei.long()
+            # ensure cross_attr is 1D float tensor
+            if isinstance(cross_attr, torch.Tensor):
+                data[("fmri","projects_to","eeg")].edge_attr = cross_attr.to(dtype=torch.float32).view(-1)
             else:
-                self._log(f"[SUMMARY] {et}: edge_index = None")
+                data[("fmri","projects_to","eeg")].edge_attr = torch.from_numpy(np.asarray(cross_attr, dtype=np.float32))
+            # reverse
+            rev = torch.stack([cross_ei[1], cross_ei[0]], dim=0)
+            data[("eeg","projects_to","fmri")].edge_index = rev.long()
+            # reverse attr: same values but aligned with rev ordering (here symmetric so same)
+            data[("eeg","projects_to","fmri")].edge_attr = data[("fmri","projects_to","eeg")].edge_attr.clone()
+            self._log(f"[CM] cross_ei shape = {tuple(cross_ei.shape)}  num_edges={cross_ei.shape[1]}")
+        else:
+            data[("fmri","projects_to","eeg")].edge_index = torch.zeros((2,0), dtype=torch.long)
+            data[("fmri","projects_to","eeg")].edge_attr = torch.empty((0,), dtype=torch.float32)
+            data[("eeg","projects_to","fmri")].edge_index = torch.zeros((2,0), dtype=torch.long)
+            data[("eeg","projects_to","fmri")].edge_attr = torch.empty((0,), dtype=torch.float32)
+            self._log("[CM] No cross-modal edges (empty)")
 
-        # ---------------------------------------------------------------------
+        # ------------------------------------------------------------
+        #  Finalize: build edge_index_dict following REL_ORDER to guarantee order/stability
+        # ------------------------------------------------------------
+        data.edge_index_dict = {}
+        for et in REL_ORDER:
+            obj = data[et]
+            # ensure edge_index is present (it should be)
+            ei = getattr(obj, "edge_index", None)
+            data.edge_index_dict[et] = ei if ei is not None else torch.zeros((2,0), dtype=torch.long)
+            self._log(f"[SUMMARY] {et}: edge_index = {tuple(data.edge_index_dict[et].shape) if isinstance(data.edge_index_dict[et], torch.Tensor) else None}")
+
         # Node summary
-        # ---------------------------------------------------------------------
         self._log("[SUMMARY] 节点信息")
         for nt in data.node_types:
             node = data[nt]

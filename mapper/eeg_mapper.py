@@ -134,17 +134,6 @@ class EEGMapper:
             return {"on": mapper_on, "off": mapper_off}
 
     def load_file(self, eeg_file: Optional[str] = None):
-        if eeg_file is None:
-            try:
-                root = Tk()
-                root.withdraw()
-                eeg_file = filedialog.askopenfilename(
-                    title="Select EEG file",
-                    filetypes=[("EEG files", "*.fif *.edf *.set"), ("All files", "*.*")]
-                )
-                root.destroy()
-            except Exception:
-                eeg_file = None
         if not eeg_file:
             raise FileNotFoundError("No EEG file provided or selected.")
         self.raw = self.preprocessor.preprocess(eeg_file)
@@ -152,13 +141,6 @@ class EEGMapper:
         self.epochs = self.preprocessor.extract_epochs(self.raw, epoch_length=self.epoch_length)
         self.node_mask = np.ones(len(self.channel_names), dtype=np.float32)
 
-        if self.debug:
-            try:
-                print(f"[DEBUG] Loaded {len(self.channel_names)} EEG channels")
-                print(f"[DEBUG] Epoch shape: {self.epochs.shape} (epochs, channels, times)")
-                print(f"[DEBUG] Sampling rate: {self.raw.info['sfreq']}")
-            except Exception:
-                print("[DEBUG] Loaded EEG (unable to print shapes)")
         return self
 
     # -------------------------
@@ -222,10 +204,6 @@ class EEGMapper:
     # 生成标签
     # -------------------------
     def generate_node_labels(self, mode="function"):
-        """
-        生成节点标签，mode 可选 "function"/"region"/自定义。
-        保存到 self.node_labels。
-        """
         if mode == "function":
             self.node_labels = [self.channel_function[ch] for ch in self.channel_names]
         elif mode == "region":
@@ -263,8 +241,7 @@ class EEGMapper:
 
         n_epochs, n_channels, n_times_epoch = epochs_arr.shape
         total_times = n_epochs * n_times_epoch
-        # 将形状变为 (n_channels, total_times)
-        ts = epochs_arr.transpose(1, 0, 2).reshape(n_channels, total_times)
+        ts = epochs_arr.transpose(1, 0, 2).reshape(n_channels, total_times)  #(N, T)
 
         # 标准化（每通道）
         ts = (ts - ts.mean(axis=1, keepdims=True)) / (ts.std(axis=1, keepdims=True) + 1e-8)
@@ -395,23 +372,52 @@ class EEGMapper:
     # -------------------------
     # get_edge_index (保持原有接口)
     # -------------------------
-    def get_edge_index(self, method: str = "threshold", threshold: Optional[float] = None, k: Optional[int] = None) -> np.ndarray:
+    def get_edge_index(
+            self,
+            method: str = "threshold",
+            threshold: Optional[float] = None,
+            k: Optional[int] = None,
+            template_path: Optional[str] = None,
+        ) -> np.ndarray:
         """
         返回 edge_index: shape (2, n_edges)
+
+        新增功能：
+        - template_path 可选
+        - 若模板存在 → 加载模板
+        - 若模板不存在 → 生成并保存模板
         """
+        # -----------------------------
+        # 1. 若提供了模板路径且文件存在 → 直接加载
+        # -----------------------------
+        if template_path is not None and os.path.exists(template_path):
+            ei = torch.load(template_path)
+            if isinstance(ei, torch.Tensor):
+                ei = ei.cpu().numpy()
+            return ei
+
+        # -----------------------------
+        # 2. 正常流程：计算功能连接矩阵
+        # -----------------------------
         if self.fc_matrix is None:
             self.compute_functional_connectivity()
 
         fc = np.abs(self.fc_matrix.copy())
         n = fc.shape[0]
+
+        # -----------------------------
+        # 3. 根据方法生成 mask（拓扑结构）
+        # -----------------------------
         if method == "full":
             mask = np.ones_like(fc, dtype=bool)
             np.fill_diagonal(mask, 0)
+
         elif method == "threshold":
             if threshold is None:
                 threshold = np.percentile(fc[np.triu_indices(n, k=1)], 90)
             mask = fc >= threshold
             np.fill_diagonal(mask, 0)
+
         elif method == "kNN":
             if k is None:
                 raise ValueError("k must be provided for kNN method")
@@ -419,13 +425,27 @@ class EEGMapper:
             for i in range(n):
                 inds = np.argsort(fc[i])[-k:]
                 mask[i, inds] = True
+            # 对称化
             mask = np.logical_or(mask, mask.T)
             np.fill_diagonal(mask, 0)
+
         else:
             raise ValueError(f"Unknown edge generation method: {method}")
 
+        # -----------------------------
+        # 4. 生成 edge_index
+        # -----------------------------
         edge_index = np.array(np.nonzero(mask))
+
+        # -----------------------------
+        # 5. 如果要求，保存模板
+        # -----------------------------
+        if template_path is not None:
+            # 保存为 torch.Tensor 以保持与 PyG 一致
+            torch.save(torch.tensor(edge_index, dtype=torch.long), template_path)
+
         return edge_index
+
 
     # -------------------------
     # 转为 PyG Data
@@ -437,89 +457,30 @@ class EEGMapper:
         edge_method: str = "threshold",
         threshold: Optional[float] = None,
         k: Optional[int] = None,
-        node_type: str = "eeg"
+        node_type: str = "eeg",
+        atlas_file: str = "F:/digital_twin_brain/schaefer200_mask_ready.json"
     ) -> HeteroData:
-        """
-        Return torch_geometric.data.HeteroData with a single node type (default 'eeg').
-        Node-level fields (no root-level pollution):
-          - data[node_type].x        : [N, F]      (static)
-          - data[node_type].x_seq    : [N, T, F]   (dynamic)
-          - data[node_type].node_mask: [N] (bool)
-          - data[node_type].pos      : [N, 3]
-          - data[node_type].region_ids: [N]
-          - data[(node_type, 'connects', node_type)].edge_index : [2, E]
-          - data[(node_type, 'connects', node_type)].edge_attr  : [E]
-        Strict: do NOT transpose or implicitly change shape — upstream must provide (N,T,F).
-        """
+        from torch_geometric.data import HeteroData
+        from scipy.spatial import cKDTree
+
         logger = logging.getLogger("EEGMapper")
 
-        if edge_index is None:
-            if self.fc_matrix is None:
-                self.compute_functional_connectivity()
-            edge_index = self.get_edge_index(method=edge_method, threshold=threshold, k=k)
-            logger.info(f"[to_pyg] Auto-generated edge_index: {edge_index.shape}")
-
-
         # --- 1. features (N, T, F) ---
-        feats = self.get_node_features(with_stats=True)  # expected (N, T, F)
-        if not isinstance(feats, (np.ndarray, torch.Tensor)):
-            raise TypeError("get_node_features must return numpy or torch array")
+        feats = self.get_node_features(with_stats=True)  # (N_eeg, T, F)
         feats = np.asarray(feats)
         if feats.ndim != 3:
             raise ValueError(f"EEG features must be 3D (N,T,F), got {feats.shape}")
         n_channels, total_times, feat_dim = feats.shape
 
-        x = torch.tensor(feats.mean(axis=1), dtype=torch.float32)     # (N, F)
-        x_seq = torch.tensor(feats, dtype=torch.float32)              # (N, T, F)
-
-        # --- 2. edge_index ---
-        if edge_index is None:
-            edge_index = self.get_edge_index(method=edge_method, threshold=threshold, k=k)
-        if isinstance(edge_index, np.ndarray):
-            edge_index = torch.from_numpy(edge_index).long()
-        if not isinstance(edge_index, torch.Tensor):
-            raise TypeError("edge_index must be a torch.Tensor after conversion")
-        if edge_index.dim() != 2 or edge_index.shape[0] != 2:
-            raise ValueError(f"edge_index must be shape [2, E], got {tuple(edge_index.shape)}")
-        if edge_index.numel() == 0:
-            edge_index = torch.zeros((2, 0), dtype=torch.long)
-
-        # validate indices
-        if edge_index.numel() > 0:
-            max_idx = int(edge_index.max().item())
-            if max_idx >= n_channels or int(edge_index.min().item()) < 0:
-                raise ValueError(f"edge_index contains invalid node indices (n_channels={n_channels})")
-
-        # --- 3. edge_attr (E,) 1D ---
-        if edge_attr is not None:
-            edge_attr = torch.tensor(np.asarray(edge_attr), dtype=torch.float32).flatten()
-        else:
-            if self.fc_matrix is None:
-                self.compute_functional_connectivity()
-            if edge_index.numel() == 0:
-                edge_attr = torch.empty((0,), dtype=torch.float32)
-            else:
-                ei_np = edge_index.cpu().numpy()
-                weights = np.asarray(self.fc_matrix)[ei_np[0], ei_np[1]]  # (E,)
-                weights = np.nan_to_num(weights, nan=0.0, posinf=0.0, neginf=0.0)
-                edge_attr = torch.tensor(weights, dtype=torch.float32).flatten()
-
-        # --- 4. node_mask (bool) ---
-        node_mask_arr = self.node_mask if getattr(self, "node_mask", None) is not None else np.ones(n_channels, dtype=np.float32)
-        node_mask = torch.tensor(np.asarray(node_mask_arr).astype(bool), dtype=torch.bool)
-
-        # --- 5. pos generation (N,3) robust ---
+        # --- 2. pos (N_eeg, 3) ---
         pos_list = []
         try:
             if getattr(self, "raw", None) is not None:
                 montage = self.raw.get_montage()
                 ch_pos_dict = montage.get_positions().get('ch_pos', {}) if montage else {}
                 for ch in getattr(self, "channel_names", []):
-                    p = ch_pos_dict.get(ch)
-                    if p is None:
-                        pos_list.append([0.0, 0.0, 0.0])
-                    else:
-                        pos_list.append([float(p[0]), float(p[1]), float(p[2])])
+                    p = ch_pos_dict.get(ch, [0.0, 0.0, 0.0])
+                    pos_list.append([float(p[0]), float(p[1]), float(p[2])])
             else:
                 pos_list = [[0.0, 0.0, 0.0]] * n_channels
         except Exception as e:
@@ -527,46 +488,84 @@ class EEGMapper:
             pos_list = [[0.0, 0.0, 0.0]] * n_channels
         pos = torch.tensor(pos_list, dtype=torch.float32)
 
-        # --- 6. region_ids safe assignment (no append bug) ---
-        region_ids = [-1] * n_channels
-        if hasattr(self, "region_ids") and self.region_ids is not None:
-            try:
-                arr = np.asarray(self.region_ids)
-                if arr.shape[0] == n_channels:
-                    region_ids = [int(v) for v in arr]
-                else:
-                    logger.warning("[to_pyg] existing region_ids length mismatch; recomputing or leaving -1")
-            except Exception:
-                region_ids = [-1] * n_channels
-        region_ids = torch.tensor(region_ids, dtype=torch.long)
+        # --- 3. Load atlas centroids (200 ROIs) ---
+        with open(atlas_file, "r") as f:
+            atlas_json = json.load(f)
 
-        # final consistency checks
-        assert x_seq.ndim == 3 and x.ndim == 2 and x.shape[0] == x_seq.shape[0] == n_channels
+        if "regions" not in atlas_json:
+            raise KeyError(f"[to_pyg] atlas JSON missing 'regions' field: {list(atlas_json.keys())}")
 
-        # --- 7. Build HeteroData (node-level only, no root fields) ---
+        regions = atlas_json["regions"]
+        if not isinstance(regions, dict) or len(regions) == 0:
+            raise ValueError("[to_pyg] 'regions' is empty or not a dict.")
+
+        roi_names = list(regions.keys())
+        atlas_centroids = []
+
+        for name in roi_names:
+            info = regions[name]
+            if "position" not in info:
+                raise KeyError(f"[to_pyg] ROI {name} missing 'position' field.")
+            pos = info["position"]
+            if not (isinstance(pos, list) and len(pos) == 3):
+                raise ValueError(f"[to_pyg] ROI {name} has invalid 'position': {pos}")
+            atlas_centroids.append(pos)
+
+        atlas_centroids = np.asarray(atlas_centroids, dtype=float)  # (N_rois, 3)
+        n_rois = atlas_centroids.shape[0]
+
+        # --- 4. map EEG to ROIs using nearest-neighbor ---
+        tree = cKDTree(pos_list)
+        roi_features = np.zeros((n_rois, total_times, feat_dim), dtype=np.float32)
+        for i, c in enumerate(atlas_centroids):
+            dists, idxs = tree.query(c, k=n_channels)  # 查询所有电极
+            # 使用所有电极加权平均（距离越近权重越大）
+            weights = 1.0 / (dists + 1e-6)
+            weights = weights / weights.sum()
+            roi_features[i] = np.tensordot(weights, feats[idxs], axes=(0, 0))
+        x_seq = torch.tensor(roi_features, dtype=torch.float32)          # (200, T, F)
+        x = x_seq.mean(dim=1)                                           # (200, F)
+        region_ids = torch.arange(n_rois, dtype=torch.long)             # [0..199]
+
+        # --- 5. Edge index / attr ---
+        if edge_index is None:
+            if self.fc_matrix is None:
+                self.compute_functional_connectivity()
+            edge_index = self.get_edge_index(method="kNN", k=10, template_path="F:/digital_twin_brain/templates/eeg_200nodes_edgeindex.pt")
+            logger.info(f"[to_pyg] Auto-generated edge_index: {edge_index.shape}")
+        if isinstance(edge_index, np.ndarray):
+            edge_index = torch.from_numpy(edge_index).long()
+        if edge_index.numel() == 0:
+            edge_index = torch.zeros((2, 0), dtype=torch.long)
+        if edge_attr is None:
+            if self.fc_matrix is None:
+                self.compute_functional_connectivity()
+            if edge_index.numel() == 0:
+                edge_attr = torch.empty((0,), dtype=torch.float32)
+            else:
+                ei_np = edge_index.cpu().numpy()
+                weights = np.asarray(self.fc_matrix)[ei_np[0], ei_np[1]]
+                weights = np.nan_to_num(weights, nan=0.0, posinf=0.0, neginf=0.0)
+                edge_attr = torch.tensor(weights, dtype=torch.float32).flatten()
+
+        # --- 6. node_mask ---
+        node_mask_arr = getattr(self, "node_mask", np.ones(n_rois, dtype=np.float32))
+        node_mask = torch.tensor(np.asarray(node_mask_arr, dtype=bool), dtype=torch.bool)
+
+        # --- 7. Build HeteroData ---
         data = HeteroData()
-
-        # node attributes (only under data[node_type])
         data[node_type].x = x
         data[node_type].x_seq = x_seq
         data[node_type].node_mask = node_mask
-        data[node_type].pos = pos
+        data[node_type].pos = torch.tensor(atlas_centroids, dtype=torch.float32)  # 用 ROI 质心作为 pos
         data[node_type].region_ids = region_ids
 
-        # edges as relation-level attributes
-        if edge_index is not None and edge_index.numel() > 0:
+        if edge_index.numel() > 0:
             data[node_type, "connects", node_type].edge_index = edge_index
             if edge_attr is not None:
                 data[node_type, "connects", node_type].edge_attr = edge_attr
 
-        # convenience dicts expected by trainer/mapper (safe, intentional root keys)
         data.x_seq_dict = {node_type: data[node_type].x_seq}
-        data.x_mean_dict = {node_type: data[node_type].x.mean(dim=1) if data[node_type].x.ndim == 2 else data[node_type].x}
-
-        if getattr(self, "debug", False):
-            logger.info(
-                f"[to_pyg] Output(node-level): x={tuple(x.shape)}, x_seq={tuple(x_seq.shape)}, "
-                f"edge_index={tuple(edge_index.shape)}, edge_attr={tuple(edge_attr.shape)}"
-            )
+        data.x_mean_dict = {node_type: data[node_type].x.mean(dim=1)}
 
         return data
