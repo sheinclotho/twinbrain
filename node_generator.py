@@ -2,7 +2,7 @@ import numpy as np
 from typing import List, Optional, Literal
 from meta_node import MetaNode
 from mapper.atlas_mapper import BrainAtlas
-from utils import add_gaussian_noise
+from utils.utils import add_gaussian_noise
 import nibabel as nib
 from tqdm import tqdm
 import logging
