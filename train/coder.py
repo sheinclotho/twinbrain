@@ -5,10 +5,7 @@ from torch_geometric.nn import HeteroConv, SAGEConv
 from torch_geometric.data import HeteroData
 import logging
 from typing import Any, Dict, List, Optional, Tuple, Union
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F_nn
+import math
 
 
 class NodeEncoder(nn.Module):
@@ -362,3 +359,101 @@ class ProjectionHead(nn.Module):
         pooled = seq.mean(dim=1)  # (N, H)
         proj = self.heads[modality](pooled)  # (N, latent_dim)
         return proj
+
+
+# train/coder.py
+
+
+class TemporalDecoder(nn.Module):
+    """
+    TemporalDecoder with residual shortcut and conditional LayerNorm:
+    - input: recon_hidden (N, T, H)
+    - output: recon_feature (N, T, F)
+    Notes:
+      - If out_dim == 1, LayerNorm over feature dim collapses to zero; use Identity instead.
+      - Uses Conv1d temporal stack with same padding and a residual shortcut from input.
+      - Stable initialization for Conv1d/Linear and LayerNorm defaults.
+    """
+    def __init__(self, in_dim: int, out_dim: int, channels: int = 128, kernel_size: int = 5, num_layers: int = 3, dropout: float = 0.1):
+        super().__init__()
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.channels = channels
+        self.kernel_size = kernel_size
+
+        # initial projection in_dim -> channels
+        self.pre_proj = nn.Conv1d(in_dim, channels, kernel_size=1, bias=False)
+        self.pre_act = nn.ReLU()
+
+        # temporal conv stack
+        convs = []
+        for i in range(num_layers):
+            convs.append(nn.Conv1d(channels, channels, kernel_size=kernel_size, padding=(kernel_size // 2), bias=False))
+            convs.append(nn.ReLU())
+            if dropout and dropout > 0:
+                convs.append(nn.Dropout(dropout))
+        self.conv_stack = nn.Sequential(*convs)
+
+        # final projection to out_dim
+        self.final_proj = nn.Conv1d(channels, out_dim, kernel_size=1, bias=True)
+
+        # shortcut projection (in_dim -> out_dim) to preserve signal & avoid collapse
+        self.shortcut = nn.Conv1d(in_dim, out_dim, kernel_size=1, bias=False)
+
+        # LayerNorm: use only if out_dim > 1; otherwise use identity to avoid collapse
+        if out_dim > 1:
+            self.norm = nn.LayerNorm(out_dim)
+        else:
+            self.norm = nn.Identity()
+
+        # Stable initialization
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv1d):
+                nn.init.kaiming_uniform_(m.weight, a=math.sqrt(5))
+                if getattr(m, "bias", None) is not None:
+                    nn.init.constant_(m.bias, 0.0)
+            elif isinstance(m, nn.Linear):
+                nn.init.kaiming_uniform_(m.weight, a=math.sqrt(5))
+                if getattr(m, "bias", None) is not None:
+                    nn.init.constant_(m.bias, 0.0)
+            elif isinstance(m, nn.LayerNorm):
+                # layer norm weight=1 bias=0
+                nn.init.constant_(m.weight, 1.0)
+                nn.init.constant_(m.bias, 0.0)
+
+        # ensure final_proj.bias small non-zero to avoid exact zero outputs at init
+        if hasattr(self.final_proj, "bias") and self.final_proj.bias is not None:
+            with torch.no_grad():
+                self.final_proj.bias.fill_(1e-2)
+
+    def forward(self, x: torch.Tensor):
+        """
+        x: (N, T, H)
+        returns: (N, T, out_dim)
+        """
+        if x is None or x.numel() == 0:
+            return x
+        n, t, h = x.shape
+        # to (N, H, T)
+        x_t = x.permute(0, 2, 1).contiguous()
+        pre = self.pre_proj(x_t)   # (N, channels, T)
+        pre = self.pre_act(pre)
+        out = self.conv_stack(pre)  # (N, channels, T)
+        out = self.final_proj(out)  # (N, out_dim, T)
+
+        # shortcut from input
+        try:
+            sc = self.shortcut(x_t)     # (N, out_dim, T)
+        except Exception:
+            # fallback: if shapes mismatch, project input via linear on last dim
+            sc = F.conv1d(x_t, torch.zeros((self.out_dim, x_t.size(1), 1), device=x_t.device))
+
+        out = out + sc              # residual add
+        # back to (N, T, out_dim)
+        out = out.permute(0, 2, 1).contiguous()
+        # conditional normalization (Identity for out_dim==1)
+        out = self.norm(out)
+        return out
