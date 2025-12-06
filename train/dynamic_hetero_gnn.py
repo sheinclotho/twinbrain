@@ -373,7 +373,11 @@ class DynamicHeteroGNN(nn.Module):
                 # fallback identity
                 recon_denorm = recon_feature_dict.get(nt, recon_feature)
 
-            recon_seq_denorm[nt] = recon_denorm
+            # IMPORTANT: expose both normalized and denormalized outputs separately:
+            # - recon_seq_denorm (outputs slot 3) will contain the normalized-space recon (recon_feature)
+            #   so diagnostics can compare normalized vs denorm easily.
+            # - recon_seq_scaled (outputs slot 4) will contain the denormalized recon (recon_denorm)
+            recon_seq_denorm[nt] = recon_feature_dict.get(nt, recon_denorm)
             recon_seq_scaled[nt] = recon_denorm
 
 
