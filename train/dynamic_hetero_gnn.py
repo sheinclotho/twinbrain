@@ -205,8 +205,11 @@ class DynamicHeteroGNN(nn.Module):
         T_pool = self.spatial_T
         temporal_edge_index_dict = {}
         for key, edge_index in edge_index_dict.items():
+            # Handle empty edge_index (valid case for graphs without certain edge types)
             if edge_index is None or edge_index.numel() == 0:
-                raise RuntimeError(f"edge_index for {key} is None or empty")
+                # Create empty edge tensor with correct shape for this edge type
+                temporal_edge_index_dict[key] = torch.empty((2, 0), dtype=torch.long, device=device)
+                continue
             src, _, dst = key
             n_src, n_dst = num_nodes.get(src, 0), num_nodes.get(dst, 0)
             e_base = edge_index.clone().long()

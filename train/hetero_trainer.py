@@ -128,9 +128,13 @@ class DynamicHeteroTrainer:
         # auto_align cache: may contain keys like 'fixed_fmri' set by external helper
         self._auto_align_cache: Dict[str, int] = {}
 
-        from utils.log_control import configure_trainer_logger 
-        configure_trainer_logger(self.logger, debug=self.debug, suppress_in_debug=True, interval=30.0, initial_allow=1)
-
+        # Configure logger (optional utility)
+        try:
+            from utils.log_control import configure_trainer_logger 
+            configure_trainer_logger(self.logger, debug=self.debug, suppress_in_debug=True, interval=30.0, initial_allow=1)
+        except ImportError:
+            # log_control utility not available, continue with default logging
+            pass
 
         # Graph encoder placeholder
         try:
@@ -896,7 +900,7 @@ class DynamicHeteroTrainer:
         except Exception:
             self.logger.warning("[Load] aligner state incompatible")
         try:
-            if "optimizer" in ckpt and "optimizer" in ckpt and ckpt["optimizer"] is not None:
+            if "optimizer" in ckpt and ckpt["optimizer"] is not None:
                 self.optimizer.load_state_dict(ckpt["optimizer"])
         except Exception:
             self.logger.warning("[Load] optimizer state incompatible")

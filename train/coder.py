@@ -447,9 +447,11 @@ class TemporalDecoder(nn.Module):
         # shortcut from input
         try:
             sc = self.shortcut(x_t)     # (N, out_dim, T)
-        except Exception:
-            # fallback: if shapes mismatch, project input via linear on last dim
-            sc = F.conv1d(x_t, torch.zeros((self.out_dim, x_t.size(1), 1), device=x_t.device))
+        except Exception as e:
+            # fallback: if shapes mismatch, skip shortcut (use zeros with correct shape)
+            # This maintains gradient flow while avoiding dimension mismatches
+            logging.warning(f"[TemporalDecoder] Shortcut failed: {e}. Using zero shortcut.")
+            sc = torch.zeros((x_t.size(0), self.out_dim, x_t.size(2)), device=x_t.device)
 
         out = out + sc              # residual add
         # back to (N, T, out_dim)
