@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from pathlib import Path
 import matplotlib.pyplot as plt
-from scipy.signal import correlate
+# Note: scipy.signal.correlate moved to utils/analysis.py
 
 import mne
 mne.set_log_level("WARNING")
@@ -35,11 +35,7 @@ from mapper.atlas_mapper import BrainAtlas
 # from mapper.eeg_mapper import EEGMapper  # Unused
 from mapper.multi_modal_mapper import MultiModalMapper
 from train.hetero_trainer import DynamicHeteroTrainer
-# optional batch rescale utility
-try:
-    from utils.utils import compute_batch_alpha as train_compute_batch_alpha
-except Exception:
-    train_compute_batch_alpha = None
+# Note: compute_batch_alpha utility was considered but is not currently used
 
 from utils.function import (
     discover_eeg_tasks,
@@ -317,6 +313,17 @@ def main():
                 print("[PRE-FINETUNE DIAG] run_forward_diagnostics not available")
         except Exception as e:
             print("[PRE-FINETUNE DIAG] run_forward_diagnostics failed:", e)
+
+        # more detailed plots (if available)
+        try:
+            if diagnostics_plot_all is not None:
+                _ = diagnostics_plot_all(trainer, nt='fmri', node_idx=0, feat_idx=0, save_dir=trainer.diagnostic_dir)
+                _ = diagnostics_plot_all(trainer, nt='eeg', node_idx=0, feat_idx=0, save_dir=trainer.diagnostic_dir)
+                print("[PRE-FINETUNE DIAG] diagnostics_plot_all saved plots to", trainer.diagnostic_dir)
+            else:
+                print("[PRE-FINETUNE DIAG] diagnostics_plot_all not available")
+        except Exception as e:
+            print("[PRE-FINETUNE DIAG] diagnostics_plot_all failed:", e)
 
 
         # compute best lag for fmri (useful to decide if shift-invariant needed)

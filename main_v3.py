@@ -31,7 +31,7 @@ import numpy as np
 import torch
 from pathlib import Path
 import matplotlib.pyplot as plt
-from scipy.signal import correlate
+# Note: scipy.signal.correlate moved to utils/analysis.py
 
 import mne
 mne.set_log_level("WARNING")
@@ -54,11 +54,7 @@ from mapper.atlas_mapper import BrainAtlas
 # from mapper.eeg_mapper import EEGMapper  # Unused
 from mapper.multi_modal_mapper import MultiModalMapper
 from train.hetero_trainer import DynamicHeteroTrainer
-# optional batch rescale utility
-try:
-    from utils.utils import compute_batch_alpha as train_compute_batch_alpha
-except Exception:
-    train_compute_batch_alpha = None
+# Note: compute_batch_alpha utility was considered but is not currently used
 
 from utils.function import (
     discover_eeg_tasks,
