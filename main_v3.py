@@ -1,10 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
+DEPRECATED: This file (main_v3.py) uses older hyperparameters and may produce suboptimal results.
+Please use main_v4.py instead, which has improved training parameters:
+- Longer fine-tuning (80 epochs vs 40)
+- Stronger temporal alignment (temp_weight=5.0 vs 1.0)  
+- Deeper decoder (3 layers vs 2)
+- Extended warmup (10 epochs vs 5)
+
+This file is kept for backward compatibility and reproducibility of older experiments.
+
+Original description:
 数字孪生脑主函数（批量多任务版）
 此版本把 decoder-only warmup 的调用加入到 main 流程中（在 trainer 初始化并做完初始 diagnostics 后执行），
 并在 warmup 后自动运行第2步的互相关滞后检验（xcorr best lag）。
 """
+
+import warnings
+warnings.warn(
+    "main_v3.py is deprecated. Please use main_v4.py for better results. "
+    "See file docstring for differences.",
+    DeprecationWarning,
+    stacklevel=2
+)
+
 import os
 import json
 import logging
