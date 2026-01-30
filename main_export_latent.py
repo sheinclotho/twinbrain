@@ -336,15 +336,13 @@ def main():
         logging.info(f"[Discover] EEG tasks: {eeg_tasks}")
         logging.info(f"[Discover] fMRI tasks: {fmri_tasks}")
 
-        stim_cache = result_dir / "stim.pt"
         eeg_data_cache = result_dir / "eeg_data.pt"
         hetero_graphs_cache = result_dir / "hetero_graphs_for_training.pt"
 
         # === 和 main_v4 一样的缓存逻辑 ===
-        if stim_cache.exists() and eeg_data_cache.exists() and hetero_graphs_cache.exists():
+        if eeg_data_cache.exists() and hetero_graphs_cache.exists():
             logging.info("[FULL CACHE HIT] Loading cached preprocessed data")
             stim = torch.load(stim_cache, map_location="cpu", weights_only=False)
-            eeg_data = torch.load(eeg_data_cache, map_location="cpu", weights_only=False)
             hetero_graphs = torch.load(hetero_graphs_cache, map_location="cpu", weights_only=False)
         else:
             logging.info("[CACHE MISS] running preprocessing + graph building")
