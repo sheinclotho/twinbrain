@@ -1,12 +1,3 @@
-# Full cleaned trainer with conservative fixes and extra debug diagnostics
-# - More robust param-group construction: explicitly include decoder/denorm-related params
-# - Prefer recon_seq_scaled (if present) when computing recon loss
-# - Safer _set_scale_requires_grad: only freeze true scale bookkeeping params and preserve original flags
-# - Extra debug print tools to show optimizer membership and tensor inconsistencies
-#
-# NOTE: This replaces train/hetero_trainer.py. You said you already made backups.
-# Review the changes before running long experiments.
-
 import os
 import time
 import logging
@@ -17,10 +8,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F_nn
 from torch_geometric.data import HeteroData
-from scipy.signal import correlate
 
 from train.dynamic_hetero_gnn import DynamicHeteroGNN
-from train.coder import GraphEncoder  # assuming GraphEncoder is defined in coder.py or elsewhere
+from train.coder import GraphEncoder
 
 # Aligners may be LatentAligner or TemporalCrossAligner depending on availability
 try:
@@ -47,27 +37,57 @@ except Exception:
 
 class DynamicHeteroTrainer:
     """
-    Trainer with:
-      - improved param-group assignment for decoders/denorm
-      - recon loss prefers recon_seq_scaled if model provides it
-      - conservative scale freeze that preserves denorm/decoder params
-      - extra debug diagnostics to inspect optimizer membership and recon tensors
+    DynamicHeteroTrainer (B 方案，GraphEncoder + DynamicHeteroGNN 分工版)
+
+    主要职责：
+    - 使用 GraphEncoder 统一负责：HeteroData -> (x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict)
+    - 使用 DynamicHeteroGNN 负责：encoded + edges -> GNN+GRU+TemporalDecoder+NodeDecoder
+    - 定义并优化多种损失（重构、时序预测、对齐、频域等）
+    - 提供 train(), save_model(), load_model(), _temporal_prediction_loss() 等公开接口
+
+    设计原则：
+    - fail-fast：接口/shape 不符合预期时直接抛出异常；
+    - 逻辑分层清晰：不在 Trainer 里做隐式编码/解码，唯一编码入口是 GraphEncoder；
+    - 保留你原有的复杂损失与 early stopping 逻辑，但尽量保证实现优雅简洁。
     """
 
-    def __init__(self, hetero_data, input_dims: Optional[Dict[str, int]] = None, hidden_dim: int = 128,
-                 num_layers: int = 8, dropout: float = 0.3, lr: float = 4e-4, num_epochs: int = 100,
-                 recon_weight: float = 1.0, recon_norm_weight: float = 1.0, recon_corr_weight: float = 0.0,
-                 temp_weight: float = 0.5, align_weight: float = 1.0, temporal_T: int = 200,
-                 spatial_T: int = 384, use_amp: bool = False, weight_decay: float = 1e-5,
-                 debug: bool = False, grad_clip: float = 1.0, warmup_epochs: int = 0,
-                 freeze_scale_during_warmup: bool = True, scale_lr_mul: float = 5.0,
-                 feature_lr_mul: float = 5.0, batch_rescale_fn: Optional[Callable] = None,
-                 batch_rescale_cfg: Optional[Dict] = None, recon_feat_var_weight: float = 0.0,
-                 scale_only_epochs: int = 0, scale_only_lr_mul: float = 20.0,
-                 spec_loss_weight: float = 0.0, spec_kernel_size: int = 11,
-                 shift_invariant_range: int = 0, shift_invariant_temp: float = 1.0,
-                 auto_align: bool = False, auto_align_max_lag: int = 120, auto_align_scope: str = "warmup"):
-        # logger
+    def __init__(
+        self,
+        hetero_data: Union[HeteroData, List[HeteroData], Dict[Any, Any]],
+        input_dims: Optional[Dict[str, int]] = None,
+        hidden_dim: int = 128,
+        num_layers: int = 8,
+        dropout: float = 0.3,
+        lr: float = 4e-4,
+        num_epochs: int = 100,
+        recon_weight: float = 1.0,
+        recon_norm_weight: float = 1.0,
+        recon_corr_weight: float = 0.0,
+        temp_weight: float = 0.5,
+        align_weight: float = 1.0,
+        temporal_T: int = 200,
+        spatial_T: int = 384,
+        use_amp: bool = False,
+        weight_decay: float = 1e-5,
+        debug: bool = False,
+        grad_clip: float = 1.0,
+        warmup_epochs: int = 0,
+        freeze_scale_during_warmup: bool = True,
+        scale_lr_mul: float = 5.0,
+        feature_lr_mul: float = 5.0,
+        batch_rescale_fn: Optional[Callable] = None,
+        batch_rescale_cfg: Optional[Dict] = None,
+        recon_feat_var_weight: float = 0.0,
+        scale_only_epochs: int = 0,
+        scale_only_lr_mul: float = 20.0,
+        spec_loss_weight: float = 0.0,
+        spec_kernel_size: int = 11,
+        shift_invariant_range: int = 0,
+        shift_invariant_temp: float = 1.0,
+        auto_align: bool = False,
+        auto_align_max_lag: int = 120,
+    ):
+        # ---------- logger ----------
         self.logger = logging.getLogger("DynamicHeteroTrainer")
         if not self.logger.handlers:
             ch = logging.StreamHandler()
@@ -75,89 +95,95 @@ class DynamicHeteroTrainer:
             self.logger.addHandler(ch)
         self.logger.setLevel(logging.INFO if debug else logging.WARNING)
 
-        # device & config
+        # ---------- device & config ----------
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.hetero_data = hetero_data
         self.input_dims = input_dims or {}
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
-        self.dropout = dropout
-        self.lr = lr
-        self.num_epochs = num_epochs
-        self.recon_weight = recon_weight
-        self.recon_norm_weight = recon_norm_weight
-        self.recon_corr_weight = recon_corr_weight
-        self.temp_weight = temp_weight
-        self.align_weight = align_weight
-        self.temporal_T = temporal_T
-        self.spatial_T = spatial_T
-        self.use_amp = use_amp and torch.cuda.is_available()
-        self.weight_decay = weight_decay
-        self.debug = debug
-        self.grad_clip = grad_clip
+        self.hidden_dim = int(hidden_dim)
+        self.num_layers = int(num_layers)
+        self.dropout = float(dropout)
+        self.lr = float(lr)
+        self.num_epochs = int(num_epochs)
+        self.recon_weight = float(recon_weight)
+        self.recon_norm_weight = float(recon_norm_weight)
+        self.recon_corr_weight = float(recon_corr_weight)
+        self.temp_weight = float(temp_weight)
+        self.align_weight = float(align_weight)
+        self.temporal_T = int(temporal_T)
+        self.spatial_T = int(spatial_T)
+        self.use_amp = bool(use_amp and torch.cuda.is_available())
+        self.weight_decay = float(weight_decay)
+        self.debug = bool(debug)
+        self.grad_clip = float(grad_clip)
 
         # warmup & scale handling
-        self.warmup_epochs = warmup_epochs
-        self.freeze_scale_during_warmup = freeze_scale_during_warmup
-        self.scale_lr_mul = scale_lr_mul
-        self.feature_lr_mul = feature_lr_mul
+        self.warmup_epochs = int(warmup_epochs)
+        self.freeze_scale_during_warmup = bool(freeze_scale_during_warmup)
+        self.scale_lr_mul = float(scale_lr_mul)
+        self.feature_lr_mul = float(feature_lr_mul)
 
         # batch rescale utility
         self.batch_rescale_fn = batch_rescale_fn
         self.batch_rescale_cfg = batch_rescale_cfg or {"enable": False, "only": [], "warmup_epochs": 0}
 
         # recon feature variance regularizer
-        self.recon_feat_var_weight = recon_feat_var_weight
+        self.recon_feat_var_weight = float(recon_feat_var_weight)
 
         # scale-only fine-tune options
-        self.scale_only_epochs = scale_only_epochs
-        self.scale_only_lr_mul = scale_only_lr_mul
+        self.scale_only_epochs = int(scale_only_epochs)
+        self.scale_only_lr_mul = float(scale_only_lr_mul)
 
         # SPEC lowpass loss options
-        self.spec_loss_weight = spec_loss_weight
-        self.spec_kernel_size = spec_kernel_size
+        self.spec_loss_weight = float(spec_loss_weight)
+        self.spec_kernel_size = int(spec_kernel_size)
 
-        # SHIFT-INVARIANT options
-        self.shift_invariant_range = shift_invariant_range
+        # shift-invariant options
+        self.shift_invariant_range = int(shift_invariant_range)
         self.shift_invariant_temp = max(1e-6, float(shift_invariant_temp))
 
-        # AUTO ALIGN config (but we only APPLY fixed lag if present)
-        self.auto_align = auto_align
+        # auto align config
+        self.auto_align = bool(auto_align)
         self.auto_align_max_lag = int(auto_align_max_lag)
-        self.auto_align_scope = auto_align_scope
-        # auto_align cache: may contain keys like 'fixed_fmri' set by external helper
         self._auto_align_cache: Dict[str, int] = {}
 
-        from utils.log_control import configure_trainer_logger 
-        configure_trainer_logger(self.logger, debug=self.debug, suppress_in_debug=True, interval=30.0, initial_allow=1)
-
-
-        # Graph encoder placeholder
+        # optional logger config helper
         try:
-            self.graph_encoder = GraphEncoder()
+            from utils.log_control import configure_trainer_logger
+            configure_trainer_logger(self.logger, debug=self.debug, suppress_in_debug=True, interval=30.0, initial_allow=1)
         except Exception:
-            self.graph_encoder = getattr(self, "graph_encoder", None)
+            pass
 
-        # flatten input hetero_data into list
+        # ---------- GraphEncoder ----------
+        try:
+            self.graph_encoder = GraphEncoder(
+                spatial_T=self.spatial_T,
+                hidden_dim=self.hidden_dim,
+                debug=self.debug,
+            )
+        except Exception as e:
+            raise RuntimeError(f"[Init] Failed to construct GraphEncoder: {e}")
+
+        # flatten hetero_data into list
         self.data_list = self._flatten_data(self.hetero_data)
         if len(self.data_list) == 0:
-            raise ValueError("No hetero_data provided to trainer")
+            raise ValueError("[Init] No hetero_data provided to trainer")
 
-        # metadata inference
+        # ---------- metadata inference ----------
         sample = self.data_list[0]
         if hasattr(sample, "metadata"):
             self.metadata = sample.metadata()
         else:
             node_types = list(sample.keys())
+            # 注意：edge_types 这里只作占位；GNN 中真正用的是 data.edge_types
             self.metadata = (node_types, [])
 
-        # infer input dims if not provided
+        # ---------- infer input dims if not provided ----------
         if not self.input_dims:
-            inferred = {}
+            inferred: Dict[str, int] = {}
             for nt in self.metadata[0]:
                 try:
                     x_seq = getattr(sample[nt], "x_seq", None)
-                    if x_seq is not None and len(x_seq.shape) == 3:
+                    if isinstance(x_seq, torch.Tensor) and x_seq.ndim == 3:
                         inferred[nt] = int(x_seq.shape[2])
                     else:
                         inferred[nt] = 1
@@ -166,7 +192,7 @@ class DynamicHeteroTrainer:
             self.input_dims = inferred
             self.logger.info(f"[Init] inferred input dims: {self.input_dims}")
 
-        # instantiate model and aligner
+        # ---------- instantiate model & aligner ----------
         self.model = DynamicHeteroGNN(
             metadata=self.metadata,
             node_feature_dims=self.input_dims,
@@ -178,53 +204,55 @@ class DynamicHeteroTrainer:
             debug=self.debug,
         ).to(self.device)
 
-        # aligner creation (fallback to dummy)
-        if LatentAligner is not None:
-            try:
-                self.aligner = LatentAligner(hidden_dim=self.hidden_dim, mode="nodewise", lambda_align=1.0, temperature=0.3).to(self.device)
-            except Exception:
-                try:
-                    from train.aligner import TemporalCrossAligner
-                    self.aligner = TemporalCrossAligner(hidden_dim=self.hidden_dim, dropout=self.dropout).to(self.device)
-                except Exception:
-                    class _DummyAligner(nn.Module):
-                        def forward(self, a, b): return torch.tensor(0.0, device=next(self.parameters()).device)
-                    self.aligner = _DummyAligner()
-        else:
+        try:
+            if LatentAligner is None:
+                raise RuntimeError("LatentAligner not available")
+            self.aligner = LatentAligner(
+                hidden_dim=self.hidden_dim,
+                mode="nodewise",
+                lambda_align=1.0,
+                temperature=0.3,
+            ).to(self.device)
+        except Exception:
             try:
                 from train.aligner import TemporalCrossAligner
                 self.aligner = TemporalCrossAligner(hidden_dim=self.hidden_dim, dropout=self.dropout).to(self.device)
             except Exception:
                 class _DummyAligner(nn.Module):
-                    def forward(self, a, b): return torch.tensor(0.0, device=next(self.parameters()).device)
+                    def forward(self, a, b):
+                        return torch.tensor(0.0, device=a.device if a is not None else "cpu")
                 self.aligner = _DummyAligner()
 
-        # ensure lazy params created: run one dummy forward
+        # ---------- lazy params: dummy forward ----------
         try:
             sample_graph = self.data_list[0].to(self.device)
             with torch.no_grad():
-                enc_out = self.graph_encoder(sample_graph)
-                _, _, _, _, edge_index_dict = enc_out
-                _ = self.model(sample_graph, edge_index_dict=edge_index_dict)
+                x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict = self.graph_encoder(sample_graph)
+                _ = self.model(
+                    data=sample_graph,
+                    edge_index_dict=edge_index_dict,
+                    encoded_dict=x_dict,
+                    num_nodes_dict=num_nodes_dict,
+                    stats_dict=stats_dict,
+                )
         except Exception as e:
             self.logger.debug(f"[Init] dummy forward failed or skipped: {e}")
 
-        # Build optimizer parameter groups (improved detection)
-        base_params = []
-        feature_params = []
-        scale_params = []
+        # ---------- optimizer param groups ----------
+        base_params: List[torch.nn.Parameter] = []
+        feature_params: List[torch.nn.Parameter] = []
+        scale_params: List[torch.nn.Parameter] = []
         aligner_params = list(self.aligner.parameters())
 
-        # helper: detect decoder/denorm candidates more broadly
-        def is_feature_decoder_name(n: str) -> bool:
-            substrs = ["feature_decoders", "decoder_input_proj", "proj_head", "temporal_projs", "denorm_decoders.decoders", "denorm_decoders"]
-            return any(s in n for s in substrs)
+        def is_feature_decoder_name(name: str) -> bool:
+            substrs = ["feature_decoders", "decoder_input_proj", "proj_head", "temporal_projs", "denorm_decoders"]
+            return any(s in name for s in substrs)
 
-        def is_scale_name(n: str) -> bool:
-            # Keep "scale" detection conservative: true global scale bookkeeping names
-            if "log_scale" in n:
+        def is_scale_name(name: str) -> bool:
+            # log_scale_* 或 scale_*（排除 scale_fixed_* buffer）
+            if "log_scale" in name:
                 return True
-            if "scale_" in n and "scale_fixed" not in n:
+            if "scale_" in name and "scale_fixed" not in name:
                 return True
             return False
 
@@ -238,129 +266,729 @@ class DynamicHeteroTrainer:
             seen_param_ids.add(pid)
             if is_feature_decoder_name(name):
                 feature_params.append(p)
-                continue
-            if is_scale_name(name):
+            elif is_scale_name(name):
                 scale_params.append(p)
-                continue
-            base_params.append(p)
+            else:
+                base_params.append(p)
 
-        param_groups = []
-        if len(base_params) > 0:
+        param_groups: List[Dict[str, Any]] = []
+        if base_params:
             param_groups.append({"params": base_params})
-        if len(feature_params) > 0:
-            param_groups.append({"params": feature_params, "lr": self.lr * float(self.feature_lr_mul)})
-        if len(scale_params) > 0:
-            param_groups.append({"params": scale_params, "lr": self.lr * float(self.scale_lr_mul)})
-        if len(aligner_params) > 0:
+        if feature_params:
+            param_groups.append({"params": feature_params, "lr": self.lr * self.feature_lr_mul})
+        if scale_params:
+            param_groups.append({"params": scale_params, "lr": self.lr * self.scale_lr_mul})
+        if aligner_params:
             param_groups.append({"params": aligner_params})
 
         self.optimizer = torch.optim.Adam(param_groups, lr=self.lr, weight_decay=self.weight_decay)
         self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=30, gamma=0.7)
         self.scaler = torch.amp.GradScaler(enabled=self.use_amp)
 
-        # bookkeeping
+        # ---------- bookkeeping ----------
         self.loss_log = {"total": [], "align": [], "temp": [], "recon": [], "recon_norm": [], "spec": []}
         self.diagnostic_dir = None
         self.use_batch_rescale = bool(self.batch_rescale_cfg.get("enable", False) and self.batch_rescale_fn is not None)
 
-        # save original requires_grad map (so we can restore exactly later)
-        self._orig_requires_grad_map: Dict[str, bool] = {name: p.requires_grad for name, p in self.model.named_parameters()}
+        # 保存初始 requires_grad 映射，便于 scale freeze/unfreeze
+        self._orig_requires_grad_map: Dict[str, bool] = {
+            name: p.requires_grad for name, p in self.model.named_parameters()
+        }
 
-        # debug print: optimizer membership summary (helps locate mis-grouped params)
+        # debug optimizer summary
         if self.debug:
             try:
                 grp_info = []
                 for i, g in enumerate(self.optimizer.param_groups):
                     names = []
                     for p in g["params"][:10]:
-                        # find a representative name
                         for nm, par in self.model.named_parameters():
                             if par is p:
                                 names.append(nm)
                                 break
-                    grp_info.append({"index": i, "lr": float(g.get("lr", self.lr)), "n_params": len(g["params"]), "example_names": names})
-                self.logger.info(f"[Init] Trainer initialized on device={self.device}. model params={sum(p.numel() for p in self.model.parameters())}")
+                    grp_info.append(
+                        {"index": i, "lr": float(g.get("lr", self.lr)), "n_params": len(g["params"]), "example_names": names}
+                    )
+                self.logger.info(
+                    f"[Init] Trainer initialized on device={self.device}. "
+                    f"model params={sum(p.numel() for p in self.model.parameters())}"
+                )
                 self.logger.info(f"[Init] Optimizer param groups: {grp_info}")
             except Exception:
                 pass
         else:
-            self.logger.info(f"[Init] Trainer initialized on device={self.device}. model params={sum(p.numel() for p in self.model.parameters())}")
-            self.logger.info(f"[Init] Optimizer param groups: base={len(base_params)}, feature={len(feature_params)}, scale={len(scale_params)}, aligner={len(aligner_params)}")
+            self.logger.info(
+                f"[Init] Trainer initialized on device={self.device}. "
+                f"model params={sum(p.numel() for p in self.model.parameters())}"
+            )
+            self.logger.info(
+                f"[Init] Optimizer param groups: base={len(base_params)}, "
+                f"feature={len(feature_params)}, scale={len(scale_params)}, aligner={len(aligner_params)}"
+            )
 
-    # Utilities (unchanged)
-    def _flatten_data(self, data) -> List[HeteroData]:
+    # ----------------------------------------------------------------------
+    # Utils
+    # ----------------------------------------------------------------------
+    def _flatten_data(self, data: Union[HeteroData, List, Dict]) -> List[HeteroData]:
         if data is None:
             return []
-        if isinstance(data, HeteroData):
-            return [data]
         if isinstance(data, list):
             return data
         if isinstance(data, dict):
-            flat = []
+            flat: List[HeteroData] = []
             for v in data.values():
-                flat.extend(v if isinstance(v, list) else [v])
+                if isinstance(v, list):
+                    flat.extend(v)
+                else:
+                    flat.append(v)
             return flat
         return [data]
 
-    def _temporal_prediction_loss(self, proj_seq: torch.Tensor, nt: str) -> torch.Tensor:
+    # ----------------------------------------------------------------------
+    # Temporal prediction loss (latent) - 你原来的逻辑，保持不变，只在接口上更严谨
+    # ----------------------------------------------------------------------
+    def _temporal_prediction_loss(
+        self,
+        proj_seq: torch.Tensor,
+        nt: str,
+        context_len: int = 40,
+        predict_len: int = 4,
+        teacher_forcing_ratio: float = 0.3,
+        return_preds: bool = False,
+        stats_nt: Optional[Dict[str, Any]] = None,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]]:
+        """
+        Autoregressive multi-step prediction loss based on proj_seq for node-type nt.
+
+        - proj_seq: (N, T, H)
+        - 返回:
+          - 若 return_preds=False: loss (Tensor)
+          - 若 return_preds=True: (loss, pred_feat, pred_denorm)
+        """
         device = self.device
+
         if proj_seq is None or proj_seq.numel() == 0:
-            return torch.tensor(0.0, device=device)
-        if proj_seq.shape[1] < 2:
-            return torch.tensor(0.0, device=device)
+            zero = torch.tensor(0.0, device=device)
+            if return_preds:
+                return zero, None, None
+            return zero
+
+        if proj_seq.ndim != 3:
+            raise ValueError(f"[TempLoss] proj_seq must be (N,T,H), got {tuple(proj_seq.shape)}")
+
+        N, T, C = proj_seq.shape
+        if T < 2:
+            zero = torch.tensor(0.0, device=device)
+            if return_preds:
+                return zero, None, None
+            return zero
+
+        # get GRU for node type
         if nt not in self.model.grus:
-            return torch.tensor(0.0, device=device)
+            zero = torch.tensor(0.0, device=device)
+            if return_preds:
+                return zero, None, None
+            return zero
         gru = self.model.grus[nt]
-        inp = proj_seq[:, :-1, :]
-        targ = proj_seq[:, 1:, :]
-        out, _ = gru(inp)
-        time_loss = F_nn.mse_loss(out, targ)
-        try:
-            pred = out.permute(0, 2, 1)
-            targ_f = targ.permute(0, 2, 1)
-            pred_fft = torch.fft.rfft(pred, dim=-1)
-            targ_fft = torch.fft.rfft(targ_f, dim=-1)
-            pred_mag = pred_fft.abs()
-            targ_mag = targ_fft.abs()
-            n_bins = pred_mag.size(-1)
-            freq_idx = torch.arange(n_bins, device=device).float()
-            weights = (freq_idx / (n_bins - 1)).view(1, 1, -1)
-            freq_loss = F_nn.mse_loss(pred_mag * weights, targ_mag * weights)
-        except Exception:
-            freq_loss = torch.tensor(0.0, device=device)
+
+        # 调整 context_len 至合理范围
+        context_len = min(context_len, T - 1)
+        if context_len <= 0:
+            context_len = max(1, T - 1)
+
+        context = proj_seq[:, :context_len, :]
+        out_ctx, h = gru(context)
+
+        next_input = out_ctx[:, -1:, :].contiguous()
+        future_targets = proj_seq[:, context_len:context_len + predict_len, :] if T > context_len else None
+
+        preds: List[torch.Tensor] = []
+        for step in range(predict_len):
+            out_step, h = gru(next_input, h)
+            pred = out_step[:, -1:, :].contiguous()
+            preds.append(pred)
+
+            do_teacher = (
+                self.model.training
+                and future_targets is not None
+                and torch.rand(1, device=device).item() < float(teacher_forcing_ratio)
+            )
+            if do_teacher and step < future_targets.shape[1]:
+                next_input = future_targets[:, step:step + 1, :].contiguous()
+            else:
+                next_input = pred
+
+        pred_feat = torch.cat(preds, dim=1) if preds else torch.zeros((N, 0, C), device=device)
+
+        time_loss = torch.tensor(0.0, device=device)
+        freq_loss = torch.tensor(0.0, device=device)
+
+        if future_targets is not None and future_targets.numel() != 0:
+            K = min(predict_len, future_targets.shape[1])
+            if K > 0:
+                time_loss = F_nn.mse_loss(pred_feat[:, :K, :], future_targets[:, :K, :])
+
+                # 频域 loss
+                try:
+                    pred_fft = torch.fft.rfft(pred_feat[:, :K, :].permute(0, 2, 1), dim=-1)
+                    targ_fft = torch.fft.rfft(future_targets[:, :K, :].permute(0, 2, 1), dim=-1)
+                    pred_mag = pred_fft.abs()
+                    targ_mag = targ_fft.abs()
+                    n_bins = pred_mag.size(-1)
+                    freq_idx = torch.arange(n_bins, device=device).float()
+                    weights = (freq_idx / max(1.0, (n_bins - 1))).view(1, 1, -1)
+                    freq_loss = F_nn.mse_loss(pred_mag * weights, targ_mag * weights)
+                except Exception:
+                    freq_loss = torch.tensor(0.0, device=device)
+
         a_t = getattr(self, "temporal_loss_alpha", 1.0)
         a_f = getattr(self, "temporal_loss_beta", 0.5)
-        return a_t * time_loss + a_f * freq_loss
+        loss = a_t * time_loss + a_f * freq_loss
 
-    def _estimate_best_lag_cpu(self, ref: np.ndarray, query: np.ndarray, max_lag: int) -> int:
-        T = len(ref)
-        if T <= 0:
-            return 0
-        corr_full = correlate(ref, query, mode='full')
-        lags = np.arange(-T + 1, T)
-        mask = (lags >= -max_lag) & (lags <= max_lag)
-        if not mask.any():
-            return 0
-        corr_masked = corr_full.copy()
-        corr_masked[~mask] = -1e18
-        best_idx = int(np.argmax(corr_masked))
-        best_lag = int(lags[best_idx])
-        return best_lag
+        pred_denorm = None
+        if return_preds:
+            den = getattr(self.model, "denorm_decoders", None)
+            if den is not None:
+                try:
+                    if hasattr(den, "forward_feature_and_denorm"):
+                        _, pred_denorm = den.forward_feature_and_denorm(pred_feat, stats_nt or {}, node_type=nt)
+                    else:
+                        pred_denorm = den(pred_feat, stats_nt or {}, node_type=nt)
+                except Exception:
+                    pred_denorm = None
+            return loss, pred_feat, pred_denorm
 
-    def _align_tensor_by_lag(self, tensor: torch.Tensor, lag: int, fill_value: float = 0.0) -> torch.Tensor:
-        if lag == 0:
-            return tensor
-        B, T, F = tensor.shape
-        rolled = torch.roll(tensor, shifts=-lag, dims=1)
-        if lag > 0:
-            rolled[:, T - lag : T, :] = fill_value
-        else:
-            rolled[:, : -lag, :] = fill_value
-        return rolled
+        return loss
+
+    # ----------------------------------------------------------------------
+    # 训练主循环（对接 GraphEncoder + DynamicHeteroGNN）
+    # ----------------------------------------------------------------------
+    def train(self, num_epochs: Optional[int] = None, verbose: bool = True):
+        """
+        训练循环（严格版）：
+        - 每个 batch：
+          1) graph_encoder(data) -> x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict
+          2) model(data, edge_index_dict, encoded_dict=x_dict, num_nodes_dict, stats_dict) -> 8-tuple
+          3) 计算对齐 / 时序预测 / 重构 / 频域等 loss
+        - 对接口不满足的情况直接抛异常，不做隐式 fallback。
+        """
+
+        epochs = num_epochs or self.num_epochs
+        self.model.train()
+        self.aligner.train()
+
+        # batch_rescale 默认配置防御
+        if "warmup_epochs" not in self.batch_rescale_cfg:
+            self.batch_rescale_cfg["warmup_epochs"] = 0
+        if not hasattr(self, "scale_only_epochs"):
+            self.scale_only_epochs = 0
+        if not hasattr(self, "scale_only_lr_mul"):
+            self.scale_only_lr_mul = 20.0
+
+        monitor_nt = "fmri"
+        patience = getattr(self, "early_stop_patience", 5)
+        lr_shrink = float(getattr(self, "early_stop_lr_shrink", 0.5))
+        min_lr = float(getattr(self, "early_stop_min_lr", 1e-7))
+
+        # warmup: freeze scale
+        if self.warmup_epochs > 0 and self.freeze_scale_during_warmup:
+            self._set_scale_requires_grad(False)
+            self.logger.info(f"[Warmup] freezing scale params for {self.warmup_epochs} epochs")
+
+        best_rel = float("inf")
+        best_epoch = 0
+        no_improve = 0
+        best_model_state = None
+        best_opt_state = None
+
+        # helper: model 输出校验
+        def _validate_model_outputs(outputs):
+            if not (isinstance(outputs, (list, tuple)) and len(outputs) == 8):
+                raise RuntimeError(
+                    "model.forward must return 8-tuple "
+                    "(z_dict, gru_out, proj_seq_dict, recon_seq_denorm, recon_seq_scaled, "
+                    "global_seq, recon_feature_dict, recon_denorm_dict). "
+                    f"Got type={type(outputs)}, len={len(outputs) if isinstance(outputs,(list,tuple)) else 'N/A'}"
+                )
+            return outputs
+
+        for epoch in range(1, epochs + 1):
+            start = time.time()
+            total_loss = total_align = total_temp = total_recon = total_recon_norm = total_spec = 0.0
+            batches = 0
+
+            # warmup 结束后解冻 scale
+            if epoch == self.warmup_epochs + 1 and self.freeze_scale_during_warmup:
+                self._set_scale_requires_grad(True)
+                self.logger.info("[Warmup] unfreezing scale params, resuming full training")
+
+            # batch_rescale 的 warmup 结束后禁用
+            if self.batch_rescale_cfg.get("enable", False) and epoch > int(self.batch_rescale_cfg.get("warmup_epochs", 0)):
+                self.batch_rescale_cfg["enable"] = False
+                self.logger.info(
+                    f"[BatchRescale] warmup_epochs passed ({self.batch_rescale_cfg.get('warmup_epochs')}), disabling batch_rescale"
+                )
+
+            for data_idx, data in enumerate(self.data_list):
+                data = data.to(self.device)
+                self.optimizer.zero_grad(set_to_none=True)
+
+                # 1) GraphEncoder
+                enc_out = self.graph_encoder(data)
+                if not (isinstance(enc_out, (list, tuple)) and len(enc_out) >= 5):
+                    raise RuntimeError(
+                        "graph_encoder(data) must return at least 5-tuple "
+                        "(x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict, ...). "
+                        f"Received type={type(enc_out)}"
+                    )
+                x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict = enc_out[:5]
+
+                # 2) model forward
+                outputs = self.model(
+                    data=data,
+                    edge_index_dict=edge_index_dict,
+                    encoded_dict=x_dict,
+                    num_nodes_dict=num_nodes_dict,
+                    stats_dict=stats_dict,
+                )
+                (
+                    z_dict,
+                    gru_seq_dict,
+                    proj_seq_dict,
+                    recon_seq_dict,
+                    recon_seq_scaled,
+                    global_seq,
+                    recon_feature_dict,
+                    recon_denorm_dict,
+                ) = _validate_model_outputs(outputs)
+
+                # 3) z_dict 清洗为 (N,H)
+                sanitized_z: Dict[str, Optional[torch.Tensor]] = {}
+                if z_dict is None:
+                    for nt in self.metadata[0]:
+                        sanitized_z[nt] = None
+                else:
+                    if not isinstance(z_dict, dict):
+                        raise TypeError("z_dict must be dict[node_type]->Tensor or None")
+                    for nt in self.metadata[0]:
+                        z = z_dict.get(nt, None)
+                        if z is None:
+                            sanitized_z[nt] = None
+                            continue
+                        if not isinstance(z, torch.Tensor):
+                            raise TypeError(f"z_dict['{nt}'] must be Tensor, got {type(z)}")
+                        if z.ndim == 1:
+                            raise ValueError(
+                                f"z_dict['{nt}'] is 1D (shape {tuple(z.shape)}). "
+                                "Please return (N,H) or (N,T,H) from model."
+                            )
+                        if z.ndim == 3:
+                            z = z.mean(dim=1)
+                        if z.ndim != 2:
+                            raise ValueError(f"z_dict['{nt}'] after processing must be (N,H), got {tuple(z.shape)}")
+                        sanitized_z[nt] = z
+
+                # 4) align loss
+                a_z_f = sanitized_z.get("fmri", None)
+                a_z_e = sanitized_z.get("eeg", None)
+                if a_z_f is not None and a_z_e is not None:
+                    align_loss = self.aligner(a_z_f, a_z_e)
+                    if not isinstance(align_loss, torch.Tensor):
+                        raise TypeError("aligner must return a torch.Tensor")
+                else:
+                    align_loss = torch.tensor(0.0, device=self.device)
+
+                # 5) temporal prediction loss + raw 预测 loss
+                temp_loss = torch.tensor(0.0, device=self.device)
+                raw_pred_loss_total = torch.tensor(0.0, device=self.device)
+                raw_pred_weight = float(getattr(self, "raw_pred_weight", self.temp_weight))
+
+                for nt in self.metadata[0]:
+                    seq = None
+                    if isinstance(proj_seq_dict, dict):
+                        seq = proj_seq_dict.get(nt, None)
+                    elif isinstance(proj_seq_dict, torch.Tensor):
+                        seq = proj_seq_dict
+                    if seq is None or (isinstance(seq, torch.Tensor) and seq.numel() == 0):
+                        continue
+                    if not isinstance(seq, torch.Tensor) or seq.ndim != 3:
+                        raise ValueError(f"proj_seq_dict['{nt}'] must be Tensor (N,T,H), got {None if seq is None else tuple(seq.shape)}")
+
+                    loss_t, pred_feat, pred_denorm = self._temporal_prediction_loss(
+                        seq, nt, return_preds=True, stats_nt=stats_dict.get(nt, None)
+                    )
+                    temp_loss = temp_loss + loss_t
+
+                    # raw 预测 loss
+                    if pred_denorm is not None:
+                        if pred_denorm.ndim != 3:
+                            raise ValueError(f"pred_denorm for '{nt}' must be (N,T_pred,F_raw), got {tuple(pred_denorm.shape)}")
+                        targ_raw = getattr(data[nt], "x_seq", None)
+                        if targ_raw is None:
+                            raise RuntimeError(
+                                f"pred_denorm returned for '{nt}' but data['{nt}'].x_seq is missing (cannot compute raw forecast loss)"
+                            )
+                        Np, Tp, Fp = pred_denorm.shape
+                        Nt, Tt, Ft = targ_raw.shape
+                        common_F = min(Fp, Ft)
+                        if Tt < Tp:
+                            raise ValueError(f"Target length {Tt} < predicted length {Tp} for '{nt}', cannot align")
+                        target_future = targ_raw.to(self.device)[:, -Tp:, :common_F]
+                        pred_crop = pred_denorm[:, :Tp, :common_F].to(self.device)
+                        raw_l = F_nn.mse_loss(pred_crop, target_future)
+                        raw_pred_loss_total = raw_pred_loss_total + raw_l
+
+                # 6) 构建 recon_final_map（优先级：recon_feature_dict+denorm → recon_seq_scaled → recon_seq_dict+denorm）
+                recon_final_map: Dict[str, torch.Tensor] = {}
+                den = getattr(self.model, "denorm_decoders", None)
+
+                for nt in self.metadata[0]:
+                    chosen = None
+
+                    # A: recon_feature_dict + denorm_decoders.forward_feature_and_denorm
+                    if isinstance(recon_feature_dict, dict) and nt in recon_feature_dict and den is not None:
+                        recon_feat = recon_feature_dict[nt]
+                        if not isinstance(recon_feat, torch.Tensor):
+                            raise TypeError(f"recon_feature_dict['{nt}'] must be Tensor")
+                        if recon_feat.ndim != 3:
+                            raise ValueError(f"recon_feature_dict['{nt}'] must be (N,T,F), got {tuple(recon_feat.shape)}")
+                        if hasattr(den, "forward_feature_and_denorm"):
+                            out = den.forward_feature_and_denorm(
+                                recon_feat, stats_dict.get(nt, None), node_type=nt
+                            )
+                            if not (isinstance(out, (list, tuple)) and len(out) >= 2):
+                                raise RuntimeError("denorm_decoders.forward_feature_and_denorm must return (feature, denorm)")
+                            _, recon_den = out[:2]
+                            if not isinstance(recon_den, torch.Tensor):
+                                raise TypeError("denorm_decoders.forward_feature_and_denorm must return Tensor as denorm")
+                            chosen = recon_den.to(self.device)
+
+                    # B: recon_seq_scaled（已经是 denorm）
+                    if chosen is None and isinstance(recon_seq_scaled, dict) and nt in recon_seq_scaled:
+                        candidate = recon_seq_scaled[nt]
+                        if not isinstance(candidate, torch.Tensor):
+                            raise TypeError(f"recon_seq_scaled['{nt}'] must be Tensor")
+                        if candidate.ndim != 3:
+                            raise ValueError(f"recon_seq_scaled['{nt}'] must be (N,T,F), got {tuple(candidate.shape)}")
+                        chosen = candidate.to(self.device)
+
+                    # C: recon_seq_dict（normalized）+ denorm_decoders
+                    if chosen is None and isinstance(recon_seq_dict, dict) and nt in recon_seq_dict and den is not None:
+                        candidate = recon_seq_dict[nt]
+                        if not isinstance(candidate, torch.Tensor):
+                            raise TypeError(f"recon_seq_dict['{nt}'] must be Tensor")
+                        recon_den = den(candidate, stats_dict.get(nt, None), node_type=nt)
+                        if not isinstance(recon_den, torch.Tensor):
+                            raise TypeError("denorm_decoders(candidate, stats) must return Tensor")
+                        chosen = recon_den.to(self.device)
+
+                    if chosen is not None:
+                        recon_final_map[nt] = chosen
+
+                if self.recon_weight > 0.0 and len(recon_final_map) == 0:
+                    raise RuntimeError(
+                        "recon_weight > 0 but no usable reconstruction in recon_final_map. "
+                        "Ensure model returns recon_seq_scaled or recon_feature_dict and denorm_decoders is valid."
+                    )
+
+                # 7) batch_rescale（如启用）
+                if self.batch_rescale_cfg.get("enable", False):
+                    if self.batch_rescale_fn is None:
+                        raise RuntimeError("batch_rescale_cfg.enable=True but batch_rescale_fn is None")
+                    temp_map: Dict[str, torch.Tensor] = {}
+                    for nt, recon in recon_final_map.items():
+                        apply_here = (not self.batch_rescale_cfg.get("only")) or (nt in self.batch_rescale_cfg.get("only", []))
+                        if not apply_here:
+                            temp_map[nt] = recon
+                            continue
+                        target = getattr(data[nt], "x_seq", None)
+                        if target is None:
+                            raise RuntimeError(f"batch_rescale requested for '{nt}' but data['{nt}'].x_seq missing")
+                        r_det = recon.detach()
+                        t_res = self._resample_time(target.to(self.device), r_det.shape[1])
+                        alpha = self.batch_rescale_fn(r_det, t_res, self.batch_rescale_cfg)
+                        if not (isinstance(alpha, (float, torch.Tensor))):
+                            raise TypeError("batch_rescale_fn must return float or Tensor")
+                        alpha_val = alpha if isinstance(alpha, torch.Tensor) else float(alpha)
+                        temp_map[nt] = recon * alpha_val
+                    recon_final_map = temp_map
+
+                # 8) 重构 loss
+                recon_loss = torch.tensor(0.0, device=self.device)
+                recon_losses_per_nt: Dict[str, float] = {}
+                for nt, recon in recon_final_map.items():
+                    target = getattr(data[nt], "x_seq", None)
+                    if target is None:
+                        raise RuntimeError(f"recon available for '{nt}' but data['{nt}'].x_seq is missing")
+                    target_res = self._resample_time(target.to(self.device), recon.shape[1])
+                    Nr, Tr, Fr = recon.shape
+                    Nt, Tt, Ft = target_res.shape
+                    mN, mT, mF = min(Nr, Nt), min(Tr, Tt), min(Fr, Ft)
+                    if mN <= 0 or mT <= 0 or mF <= 0:
+                        raise ValueError(f"No overlap between recon and target for '{nt}'")
+                    r_crop = recon[:mN, :mT, :mF]
+                    t_crop = target_res[:mN, :mT, :mF]
+                    l_nt = F_nn.mse_loss(r_crop, t_crop)
+                    recon_losses_per_nt[nt] = float(l_nt.detach().cpu())
+                    recon_loss = recon_loss + l_nt
+
+                # 9) recon_norm/spec loss（如果启用）
+                recon_norm_loss = torch.tensor(0.0, device=self.device)
+                spec_loss_total = torch.tensor(0.0, device=self.device)
+                if isinstance(recon_feature_dict, dict) and self.recon_norm_weight > 0.0:
+                    for nt in self.metadata[0]:
+                        if nt not in recon_feature_dict:
+                            continue
+                        recon_feat = recon_feature_dict[nt]
+                        if not isinstance(recon_feat, torch.Tensor) or recon_feat.ndim != 3:
+                            raise ValueError(f"recon_feature_dict['{nt}'] must be (N,T,F)")
+                        stats = stats_dict.get(nt, None)
+                        target = getattr(data[nt], "x_seq", None)
+                        if stats is None or target is None:
+                            continue
+                        target_res = self._resample_time(target.to(self.device), recon_feat.shape[1])
+                        Nr, Tr, Fr = recon_feat.shape
+                        Nt, Tt, Ft = target_res.shape
+                        mN, mT, mF = min(Nr, Nt), min(Tr, Tt), min(Fr, Ft)
+                        if mN <= 0 or mT <= 0 or mF <= 0:
+                            continue
+                        rf = recon_feat[:mN, :mT, :mF]
+                        mean_expand = stats["mean"].expand(-1, recon_feat.shape[1], -1)[:mN, :mT, :mF]
+                        std_expand = stats["std"].expand(-1, recon_feat.shape[1], -1)[:mN, :mT, :mF]
+                        tnorm = (target_res[:mN, :mT, :mF] - mean_expand) / (std_expand + 1e-8)
+                        recon_norm_loss = recon_norm_loss + F_nn.mse_loss(rf, tnorm)
+                        if self.spec_loss_weight > 0.0:
+                            spec_loss_total = spec_loss_total + lowpass_mse_loss(
+                                rf, tnorm, kernel_size=self.spec_kernel_size
+                            )
+
+                # 10) recon_corr loss（如启用）
+                recon_corr_loss = torch.tensor(0.0, device=self.device)
+                if isinstance(recon_feature_dict, dict) and self.recon_corr_weight > 0.0:
+                    r_list = []
+                    eps = 1e-8
+                    for nt in self.metadata[0]:
+                        if nt not in recon_feature_dict:
+                            continue
+                        recon_feat = recon_feature_dict[nt]
+                        stats = stats_dict.get(nt, None)
+                        target = getattr(data[nt], "x_seq", None)
+                        if (
+                            not isinstance(recon_feat, torch.Tensor)
+                            or recon_feat.ndim != 3
+                            or stats is None
+                            or target is None
+                        ):
+                            continue
+                        target_res = self._resample_time(target.to(self.device), recon_feat.shape[1])
+                        Nr, Tr, Fr = recon_feat.shape
+                        Nt, Tt, Ft = target_res.shape
+                        mN, mT, mF = min(Nr, Nt), min(Tr, Tt), min(Fr, Ft)
+                        if mN <= 0 or mT <= 0 or mF <= 0:
+                            continue
+                        rf = recon_feat[:mN, :mT, :mF].reshape(-1, mF)
+                        mean_expand = stats["mean"].expand(-1, recon_feat.shape[1], -1)[:mN, :mT, :mF]
+                        std_expand = stats["std"].expand(-1, recon_feat.shape[1], -1)[:mN, :mT, :mF]
+                        tnorm = ((target_res[:mN, :mT, :mF] - mean_expand) / (std_expand + eps)).reshape(-1, mF)
+                        rf_center = rf - rf.mean(dim=0, keepdim=True)
+                        t_center = tnorm - tnorm.mean(dim=0, keepdim=True)
+                        num = (rf_center * t_center).sum(dim=0)
+                        den = torch.sqrt((rf_center ** 2).sum(dim=0) * (t_center ** 2).sum(dim=0) + eps)
+                        r_feat = num / (den + eps)
+                        r_list.append(r_feat.mean())
+                    if r_list:
+                        mean_r = torch.stack(r_list).mean()
+                        recon_corr_loss = 1.0 - mean_r
+
+                # 11) 总 loss
+                loss = (
+                    self.align_weight * align_loss
+                    + self.temp_weight * temp_loss
+                    + self.recon_weight * recon_loss
+                )
+                if self.recon_norm_weight > 0.0:
+                    loss = loss + self.recon_norm_weight * recon_norm_loss
+                if self.recon_corr_weight > 0.0:
+                    loss = loss + self.recon_corr_weight * recon_corr_loss
+                if self.spec_loss_weight > 0.0:
+                    loss = loss + self.spec_loss_weight * spec_loss_total
+                if raw_pred_loss_total.numel() != 0 and float(raw_pred_loss_total.detach().cpu()) != 0.0:
+                    loss = loss + raw_pred_weight * raw_pred_loss_total
+
+                # 12) backward + step
+                if self.use_amp:
+                    self.scaler.scale(loss).backward()
+                    if self.grad_clip > 0:
+                        self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(
+                            list(self.model.parameters()) + list(self.aligner.parameters()),
+                            self.grad_clip,
+                        )
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    loss.backward()
+                    if self.grad_clip > 0:
+                        torch.nn.utils.clip_grad_norm_(
+                            list(self.model.parameters()) + list(self.aligner.parameters()),
+                            self.grad_clip,
+                        )
+                    self.optimizer.step()
+
+                # 13) accumulate stats
+                total_loss += float(loss.detach().cpu())
+                total_align += float(align_loss.detach().cpu())
+                total_temp += float(temp_loss.detach().cpu())
+                total_recon += float(recon_loss.detach().cpu())
+                total_recon_norm += float(recon_norm_loss.detach().cpu())
+                total_spec += float(spec_loss_total.detach().cpu())
+                batches += 1
+
+                if data_idx == 0 and verbose:
+                    self.logger.info(f"[Train] epoch={epoch} batch=0 recon_losses={recon_losses_per_nt}")
+
+            if batches == 0:
+                raise RuntimeError("[Train] No batches processed in epoch; check data_list and graph_encoder outputs")
+
+            # 14) epoch-level log & scheduler
+            avg_total = total_loss / batches
+            avg_align = total_align / batches
+            avg_temp = total_temp / batches
+            avg_recon = total_recon / batches
+            avg_recon_norm = total_recon_norm / batches
+            avg_spec = total_spec / batches
+
+            self.loss_log["total"].append(avg_total)
+            self.loss_log["align"].append(avg_align)
+            self.loss_log["temp"].append(avg_temp)
+            self.loss_log["recon"].append(avg_recon)
+            self.loss_log["recon_norm"].append(avg_recon_norm)
+            self.loss_log["spec"].append(avg_spec)
+
+            try:
+                self.scheduler.step()
+            except Exception:
+                self.logger.warning("[Train] scheduler.step() failed; continuing")
+
+            # 15) relative error (使用最后一个 batch 的 recon_final_map 和 data)
+            rel_error_epoch: Dict[str, float] = {}
+            try:
+                rel_error_epoch = self._compute_relative_error(recon_final_map, data, self.metadata)
+            except Exception:
+                self.logger.warning("[Train] relative error computation failed for this epoch")
+
+            # 16) early stopping / LR 调整
+            monitor_val = rel_error_epoch.get(monitor_nt, avg_recon)
+            improved = monitor_val < best_rel - 1e-12
+            if improved:
+                best_rel = monitor_val
+                best_epoch = epoch
+                no_improve = 0
+                best_model_state = {k: v.cpu() for k, v in self.model.state_dict().items()}
+                try:
+                    best_opt_state = self.optimizer.state_dict()
+                except Exception:
+                    best_opt_state = None
+                self.logger.info(f"[Monitor] new best {monitor_nt} rel={best_rel:.6f} at epoch={epoch}")
+            else:
+                no_improve += 1
+                self.logger.info(
+                    f"[Monitor] no_improve={no_improve}/{patience} "
+                    f"(current {monitor_nt}={monitor_val:.6f} best={best_rel:.6f})"
+                )
+                if no_improve >= patience:
+                    self.logger.info(
+                        f"[Monitor] patience reached ({patience}). "
+                        f"Rolling back to epoch={best_epoch} and shrinking LR by {lr_shrink}"
+                    )
+                    if best_model_state is not None:
+                        self.model.load_state_dict({k: v.to(self.device) for k, v in best_model_state.items()})
+                    if best_opt_state is not None:
+                        try:
+                            self.optimizer.load_state_dict(best_opt_state)
+                        except Exception:
+                            self.logger.warning("[Monitor] Failed to restore optimizer state")
+                    for g in self.optimizer.param_groups:
+                        old_lr = float(g.get("lr", self.lr))
+                        new_lr = max(old_lr * lr_shrink, min_lr)
+                        g["lr"] = new_lr
+                    no_improve = 0
+
+            if verbose:
+                self.logger.info(
+                    f"[Epoch {epoch:3d}] total={avg_total:.6f} align={avg_align:.6f} "
+                    f"temp={avg_temp:.6f} recon={avg_recon:.6f} recon_norm={avg_recon_norm:.6f} "
+                    f"spec={avg_spec:.6f} time={time.time()-start:.2f}s"
+                )
+                self.logger.info(f"[Epoch {epoch}] relative_error={rel_error_epoch}")
+
+    # ----------------------------------------------------------------------
+    # Scale freeze / unfreeze
+    # ----------------------------------------------------------------------
+    def _set_scale_requires_grad(self, flag: bool):
+        """
+        只对 scale/log_scale 参数的 requires_grad 做切换；
+        - flag=False: 冻结这些 scale 参数；
+        - flag=True: 恢复到初始化时记录的 requires_grad。
+        """
+        if flag:
+            for name, p in self.model.named_parameters():
+                if name in self._orig_requires_grad_map:
+                    try:
+                        p.requires_grad = self._orig_requires_grad_map[name]
+                    except Exception:
+                        pass
+            self.logger.info("[Scale] restored requires_grad from original map")
+            return
+
+        changed = 0
+        for name, p in self.model.named_parameters():
+            if ("log_scale" in name) or ("scale_" in name and "scale_fixed" not in name):
+                try:
+                    p.requires_grad = False
+                    changed += 1
+                except Exception:
+                    pass
+        self.logger.info(f"[Scale] set requires_grad=False for {changed} scale/log_scale params")
+
+    # ----------------------------------------------------------------------
+    # Relative error & hist utils（保持你原有接口，只精简实现）
+    # ----------------------------------------------------------------------
+    def _compute_relative_error(self, recon_seq_scaled: Dict[str, torch.Tensor], data: HeteroData,
+                                metadata: Tuple[List[str], List[Tuple[str, str, str]]],
+                                eps: float = 1e-8, debug: bool = False) -> Dict[str, float]:
+        rel_error: Dict[str, float] = {}
+        for nt in metadata[0]:
+            if nt not in recon_seq_scaled:
+                continue
+            recon = recon_seq_scaled[nt]
+            target = getattr(data[nt], "x_seq", None)
+            if target is None:
+                continue
+            target_res = self._resample_time(target.to(self.device), recon.shape[1])
+            Nr, Tr, Fr = recon.shape
+            Nt, Tt, Ft = target_res.shape
+            mN, mT, mF = min(Nr, Nt), min(Tr, Tt), min(Fr, Ft)
+            if mN <= 0 or mT <= 0 or mF <= 0:
+                continue
+            r = recon[:mN, :mT, :mF]
+            t = target_res[:mN, :mT, :mF]
+            diff_norm = torch.norm(r - t)
+            target_norm = torch.norm(t) + eps
+            rel = diff_norm / target_norm
+            rel_error[nt] = float(rel.item())
+            if debug:
+                self.logger.info(
+                    f"[RelError:{nt}] recon mean={r.mean().item():.5f} std={r.std().item():.5f} "
+                    f"target mean={t.mean().item():.5f} std={t.std().item():.5f} rel={rel.item():.5f}"
+                )
+        return rel_error
 
     def _resample_time(self, x: torch.Tensor, target_T: int) -> torch.Tensor:
         if x is None or x.numel() == 0:
             return x
+        if x.ndim != 3:
+            raise ValueError(f"_resample_time expects (N,T,F), got {tuple(x.shape)}")
         N, T_orig, F_dim = x.shape
         xp = x.permute(0, 2, 1)
         if T_orig > target_T:
@@ -371,516 +999,14 @@ class DynamicHeteroTrainer:
             out = xp
         return out.permute(0, 2, 1).contiguous()
 
-    # Train loop (with only fixed-lag application)
-    def train(self, num_epochs: Optional[int] = None, verbose: bool = True):
-        if not hasattr(self, "recon_feat_var_weight"):
-            self.recon_feat_var_weight = 0.0
-        if not hasattr(self, "batch_rescale_cfg"):
-            self.batch_rescale_cfg = {"enable": False, "warmup_epochs": 0}
-        if "warmup_epochs" not in self.batch_rescale_cfg:
-            self.batch_rescale_cfg["warmup_epochs"] = 0
-        if not hasattr(self, "scale_only_epochs"):
-            self.scale_only_epochs = 0
-        if not hasattr(self, "scale_only_lr_mul"):
-            self.scale_only_lr_mul = 20.0
-
-        epochs = num_epochs or self.num_epochs
-        self.model.train()
-        self.aligner.train()
-
-        if getattr(self, "warmup_epochs", 0) > 0 and getattr(self, "freeze_scale_during_warmup", False):
-            # conservative freeze: only freeze true bookkeeping scale params, preserve denorm/decoder params
-            self._set_scale_requires_grad(False)
-            self.logger.info(f"[Warmup] freezing scale params for {self.warmup_epochs} epochs")
-
-        for epoch in range(1, epochs + 1):
-            # preserve any dataset-level fixed lags (keys starting with 'fixed_') across epochs
-            _preserved = {}
-            if hasattr(self, "_auto_align_cache") and isinstance(self._auto_align_cache, dict):
-                for k, v in list(self._auto_align_cache.items()):
-                    try:
-                        if str(k).startswith("fixed_"):
-                            _preserved[k] = v
-                    except Exception:
-                        continue
-            self._auto_align_cache = _preserved
-
-            # debug: print preserved fixed lags at epoch start
-            if self.debug:
-                try:
-                    self.logger.info(f"[AutoAlign] preserved fixed lags at epoch start: {self._auto_align_cache}")
-                except Exception:
-                    pass
-
-            start = time.time()
-            total_loss = total_align = total_temp = total_recon = total_recon_norm = total_spec = 0.0
-            batches = 0
-
-            if self.batch_rescale_cfg.get("enable", False) and epoch > int(self.batch_rescale_cfg.get("warmup_epochs", 0)):
-                self.batch_rescale_cfg["enable"] = False
-                self.logger.info(f"[BatchRescale] warmup_epochs passed ({self.batch_rescale_cfg.get('warmup_epochs')}), disabling batch_rescale")
-
-            if epoch == getattr(self, "warmup_epochs", 0) + 1 and getattr(self, "freeze_scale_during_warmup", False):
-                # restore original requires_grad map for scale-like params
-                self._set_scale_requires_grad(True)
-                self.logger.info("[Warmup] unfreezing scale params, resuming full training")
-
-            for data_idx, data in enumerate(self.data_list):
-                data = data.to(self.device)
-                self.optimizer.zero_grad(set_to_none=True)
-
-                # encoder
-                encoder_out = self.graph_encoder(data)
-                x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict = encoder_out
-
-                with torch.cuda.amp.autocast(enabled=self.use_amp):
-                    outputs = self.model(data, edge_index_dict=edge_index_dict)
-                    if len(outputs) >= 7:
-                        z_dict, gru_seq_dict, proj_seq_dict, recon_seq_dict, recon_seq_scaled, global_seq, recon_feature_dict = outputs[:7]
-                    else:
-                        z_dict, gru_seq_dict, proj_seq_dict, recon_seq_dict, recon_seq_scaled, global_seq = outputs[:6]
-                        recon_feature_dict = None
-
-
-
-                    # --- APPLY FIXED AUTO-ALIGN IF CONFIGURED (with debug pre/post corr) ---
-                    if self.auto_align and recon_feature_dict is not None:
-                        for nt in list(recon_feature_dict.keys()):
-                            key = f"fixed_{nt}"
-                            if key in getattr(self, "_auto_align_cache", {}):
-                                lag = int(self._auto_align_cache[key])
-                                if lag != 0:
-                                    # debug: compute pre-application cross-corr summary (mean across batch & features)
-                                    try:
-                                        if self.debug:
-                                            target_raw_dbg = getattr(data[nt], "x_seq", None)
-                                            if target_raw_dbg is not None:
-                                                t_res_dbg = self._resample_time(target_raw_dbg.to(self.device), recon_feature_dict[nt].shape[1])
-                                                ref_dbg = t_res_dbg.detach().cpu().numpy().mean(axis=(0, 2))
-                                                qry_dbg = recon_feature_dict[nt].detach().cpu().numpy().mean(axis=(0, 2))
-                                                # normalize
-                                                tvz = (ref_dbg - ref_dbg.mean()) / (ref_dbg.std() + 1e-8)
-                                                qvz = (qry_dbg - qry_dbg.mean()) / (qry_dbg.std() + 1e-8)
-                                                from scipy.signal import correlate as _corr
-                                                corr_full = _corr(tvz, qvz, mode='full')
-                                                lags_full = np.arange(-len(tvz) + 1, len(tvz))
-                                                best_idx0 = int(np.argmax(corr_full))
-                                                best_lag0 = int(lags_full[best_idx0])
-                                                best_corr0 = float(corr_full[best_idx0] / len(tvz))
-                                                self.logger.info(f"[AutoAlign DEBUG BEFORE] nt={nt} best_lag={best_lag0} best_corr={best_corr0:.4f} stored_fixed={lag}")
-                                    except Exception:
-                                        pass
-
-                                    # apply alignment to recon_feature_dict + recon_seq variants
-                                    try:
-                                        recon_feature_dict[nt] = self._align_tensor_by_lag(recon_feature_dict[nt], lag, fill_value=0.0)
-                                    except Exception:
-                                        pass
-                                    try:
-                                        if isinstance(recon_seq_dict, dict) and nt in recon_seq_dict:
-                                            recon_seq_dict[nt] = self._align_tensor_by_lag(recon_seq_dict[nt], lag, fill_value=0.0)
-                                        if isinstance(recon_seq_scaled, dict) and nt in recon_seq_scaled:
-                                            recon_seq_scaled[nt] = self._align_tensor_by_lag(recon_seq_scaled[nt], lag, fill_value=0.0)
-                                    except Exception:
-                                        pass
-
-                                    # debug: compute post-application cross-corr summary
-                                    try:
-                                        if self.debug:
-                                            t_res_dbg = getattr(data[nt], "x_seq", None)
-                                            if t_res_dbg is not None:
-                                                t_res_dbg = self._resample_time(t_res_dbg.to(self.device), recon_feature_dict[nt].shape[1])
-                                                ref_dbg = t_res_dbg.detach().cpu().numpy().mean(axis=(0, 2))
-                                                qry_dbg_al = recon_feature_dict[nt].detach().cpu().numpy().mean(axis=(0, 2))
-                                                tvz2 = (ref_dbg - ref_dbg.mean()) / (ref_dbg.std() + 1e-8)
-                                                qvz2 = (qry_dbg_al - qry_dbg_al.mean()) / (qry_dbg_al.std() + 1e-8)
-                                                from scipy.signal import correlate as _corr
-                                                corr_full2 = _corr(tvz2, qvz2, mode='full')
-                                                best_idx1 = int(np.argmax(corr_full2))
-                                                best_lag1 = int(lags_full[best_idx1])
-                                                best_corr1 = float(corr_full2[best_idx1] / len(tvz2))
-                                                self.logger.info(f"[AutoAlign DEBUG AFTER] nt={nt} applied_lag={lag} best_lag_after={best_lag1} best_corr_after={best_corr1:.4f}")
-                                    except Exception:
-                                        pass
-                    # --- end apply ---
-
-                    # align loss
-                    a_z_f = z_dict.get("fmri", None) if isinstance(z_dict, dict) else None
-                    a_z_e = z_dict.get("eeg", None) if isinstance(z_dict, dict) else None
-                    align_loss = self.aligner(a_z_f, a_z_e) if (a_z_f is not None and a_z_e is not None) else torch.tensor(0.0, device=self.device)
-
-                    # temporal
-                    temp_loss = torch.tensor(0.0, device=self.device)
-                    for nt in self.metadata[0]:
-                        seq = proj_seq_dict.get(nt, None)
-                        temp_loss = temp_loss + self._temporal_prediction_loss(seq, nt)
-
-                    # batch rescale
-                    # prefer scaled recon if available (this ensures training uses denorm output when present)
-                    recon_to_use = {}
-                    batch_alphas = {}
-                    if isinstance(recon_seq_scaled, dict):
-                        # recon_seq_scaled present; use it as primary denorm output
-                        for nt in self.metadata[0]:
-                            if nt in recon_seq_scaled:
-                                recon_to_use[nt] = recon_seq_scaled[nt]
-                            elif isinstance(recon_seq_dict, dict) and nt in recon_seq_dict:
-                                recon_to_use[nt] = recon_seq_dict[nt]
-                    else:
-                        recon_to_use = recon_seq_dict
-
-                    if self.batch_rescale_cfg.get("enable", False) and self.batch_rescale_fn is not None:
-                        temp_recon_to_use = {}
-                        for nt, recon in (recon_to_use.items() if isinstance(recon_to_use, dict) else []):
-                            apply_here = (not self.batch_rescale_cfg.get("only")) or (nt in self.batch_rescale_cfg.get("only", []))
-                            if apply_here:
-                                t = getattr(data[nt], "x_seq")
-                                if t is None:
-                                    alpha = 1.0
-                                else:
-                                    r_det = recon.detach()
-                                    t_res = self._resample_time(t.to(self.device), r_det.shape[1])
-                                    alpha = self.batch_rescale_fn(r_det, t_res, self.batch_rescale_cfg)
-                                batch_alphas[nt] = alpha
-                                temp_recon_to_use[nt] = recon * (alpha if isinstance(alpha, torch.Tensor) else float(alpha))
-                            else:
-                                temp_recon_to_use[nt] = recon
-                        recon_to_use = temp_recon_to_use
-
-                    # recon loss
-                    recon_loss = torch.tensor(0.0, device=self.device)
-                    recon_losses_per_nt = {}
-                    for nt in self.metadata[0]:
-                        # prefer recon_to_use (which favors recon_seq_scaled when available)
-                        recon = recon_to_use.get(nt, None) if isinstance(recon_to_use, dict) else None
-                        if recon is None and isinstance(recon_seq_dict, dict) and nt in recon_seq_dict:
-                            recon = recon_seq_dict.get(nt)
-                        target = getattr(data[nt], "x_seq")
-                        target_res = self._resample_time(target.to(self.device), recon.shape[1])
-
-                        Nr, Tr, Fr = recon.shape
-                        Nt, Tt, Ft = target_res.shape
-                        min_N, min_T, min_F = min(Nr, Nt), min(Tr, Tt), min(Fr, Ft)
-
-                        recon_crop = recon[:min_N, :min_T, :min_F]
-                        target_crop = target_res[:min_N, :min_T, :min_F]
-
-                        l_nt = F_nn.mse_loss(recon_crop, target_crop)
-                        recon_losses_per_nt[nt] = float(l_nt.detach().cpu())
-                        recon_loss = recon_loss + l_nt
-
-                    # recon_norm/spec/recon_corr logic (unchanged, uses recon_feature_dict which may be aligned above)
-                    recon_norm_loss = torch.tensor(0.0, device=self.device)
-                    spec_loss_total = torch.tensor(0.0, device=self.device)
-                    if recon_feature_dict is not None and getattr(self, "recon_norm_weight", 0.0) and self.recon_norm_weight > 0:
-                        for nt in self.metadata[0]:
-                            if nt not in recon_feature_dict:
-                                continue
-                            recon_feat = recon_feature_dict[nt]
-                            stats = stats_dict.get(nt, {"mean": None, "std": None})
-                            mean = stats.get("mean", None)
-                            std = stats.get("std", None)
-                            if mean is None or std is None:
-                                continue
-                            target = getattr(data[nt], "x_seq")
-                            target_res = self._resample_time(target.to(self.device), recon_feat.shape[1])
-
-                            Nr, Tr, Fr = recon_feat.shape
-                            Nt, Tt, Ft = target_res.shape
-                            min_N, min_T, min_F = min(Nr, Nt), min(Tr, Tt), min(Fr, Ft)
-
-                            recon_feat_crop = recon_feat[:min_N, :min_T, :min_F]
-                            mean_expand = mean.expand(-1, recon_feat.shape[1], -1)[:min_N, :min_T, :min_F]
-                            std_expand = std.expand(-1, recon_feat.shape[1], -1)[:min_N, :min_T, :min_F]
-                            target_norm = (target_res[:min_N, :min_T, :min_F] - mean_expand) / (std_expand + 1e-8)
-
-                            # SHIFT-INVARIANT normalized-space handling (soft-min over small shifts)
-                            if getattr(self, "shift_invariant_range", 0) and int(self.shift_invariant_range) > 0:
-                                sR = int(self.shift_invariant_range)
-                                shifts = list(range(-sR, sR + 1))
-                                mse_shifts = []
-                                for s in shifts:
-                                    if s == 0:
-                                        targ_s = target_norm
-                                    else:
-                                        targ_s = torch.roll(target_norm, shifts=s, dims=1)
-                                    try:
-                                        mse_s = F_nn.mse_loss(recon_feat_crop, targ_s)
-                                    except Exception:
-                                        mse_s = torch.tensor(float("nan"), device=self.device)
-                                    mse_shifts.append(mse_s)
-                                mse_stack = torch.stack([m if torch.isfinite(m) else torch.tensor(1e9, device=self.device) for m in mse_shifts])
-                                temp = max(1e-6, float(getattr(self, "shift_invariant_temp", 1.0)))
-                                weights = torch.softmax((-mse_stack / temp), dim=0)
-                                combined_mse = torch.sum(weights * mse_stack)
-                                recon_norm_loss = recon_norm_loss + combined_mse
-
-                                # SPEC/lowpass: compute weighted spec over same shifts for consistency
-                                if getattr(self, "spec_loss_weight", 0.0) and self.spec_loss_weight > 0:
-                                    spec_shifts = []
-                                    for idx, s in enumerate(shifts):
-                                        if s == 0:
-                                            targ_s = target_norm
-                                        else:
-                                            targ_s = torch.roll(target_norm, shifts=s, dims=1)
-                                        try:
-                                            spec_shifts.append(lowpass_mse_loss(recon_feat_crop, targ_s, kernel_size=self.spec_kernel_size))
-                                        except Exception:
-                                            spec_shifts.append(torch.tensor(0.0, device=self.device))
-                                    spec_stack = torch.stack(spec_shifts)
-                                    spec_weighted = torch.sum(weights * spec_stack)
-                                    spec_loss_total = spec_loss_total + spec_weighted
-                            else:
-                                recon_norm_loss = recon_norm_loss + F_nn.mse_loss(recon_feat_crop, target_norm)
-
-                                # variance regularizer
-                                if getattr(self, "recon_feat_var_weight", 0.0) and self.recon_feat_var_weight > 0:
-                                    rf_flat = recon_feat_crop.reshape(recon_feat_crop.shape[0], -1)
-                                    rf_std = rf_flat.std(dim=1).mean()
-                                    recon_norm_loss = recon_norm_loss + self.recon_feat_var_weight * F_nn.mse_loss(rf_std, torch.tensor(1.0, device=rf_std.device))
-
-                                # SPEC / lowpass loss
-                                if getattr(self, "spec_loss_weight", 0.0) and self.spec_loss_weight > 0:
-                                    try:
-                                        spec_loss_nt = lowpass_mse_loss(recon_feat_crop, target_norm, kernel_size=self.spec_kernel_size)
-                                        spec_loss_total = spec_loss_total + spec_loss_nt
-                                    except Exception as e:
-                                        if self.debug:
-                                            self.logger.debug(f"[SpecLoss] failed for nt={nt}: {e}")
-
-                    # recon_corr_loss (differentiable Pearson avg loss) unchanged
-                    recon_corr_loss = torch.tensor(0.0, device=self.device)
-                    if recon_feature_dict is not None and getattr(self, "recon_corr_weight", 0.0) and self.recon_corr_weight > 0:
-                        r_list = []
-                        eps = 1e-8
-                        for nt in self.metadata[0]:
-                            if nt not in recon_feature_dict:
-                                continue
-                            recon_feat = recon_feature_dict[nt]
-                            stats = stats_dict.get(nt, {"mean": None, "std": None})
-                            mean = stats.get("mean", None)
-                            std = stats.get("std", None)
-                            if mean is None or std is None:
-                                continue
-                            target = getattr(data[nt], "x_seq")
-                            target_res = self._resample_time(target.to(self.device), recon_feat.shape[1])
-
-                            Nr, Tr, Fr = recon_feat.shape
-                            Nt, Tt, Ft = target_res.shape
-                            min_N, min_T, min_F = min(Nr, Nt), min(Tr, Tt), min(Fr, Ft)
-
-                            rf = recon_feat[:min_N, :min_T, :min_F].reshape(-1, min_F)  # (S, F)
-                            mean_expand = mean.expand(-1, recon_feat.shape[1], -1)[:min_N, :min_T, :min_F]
-                            std_expand = std.expand(-1, recon_feat.shape[1], -1)[:min_N, :min_T, :min_F]
-                            tnorm = ((target_res[:min_N, :min_T, :min_F] - mean_expand) / (std_expand + eps)).reshape(-1, min_F)
-                            rf_center = rf - rf.mean(dim=0, keepdim=True)
-                            t_center = tnorm - tnorm.mean(dim=0, keepdim=True)
-                            num = (rf_center * t_center).sum(dim=0)
-                            den = torch.sqrt((rf_center ** 2).sum(dim=0) * (t_center ** 2).sum(dim=0) + eps)
-                            r_feat = num / (den + eps)
-                            r_mean = torch.mean(r_feat)
-                            r_list.append(r_mean)
-                        if len(r_list) > 0:
-                            mean_r = torch.stack(r_list).mean()
-                            recon_corr_loss = 1.0 - mean_r
-                        else:
-                            recon_corr_loss = torch.tensor(0.0, device=self.device)
-
-                    # total
-                    loss = self.align_weight * align_loss + self.temp_weight * temp_loss + self.recon_weight * recon_loss
-                    if getattr(self, "recon_norm_weight", 0.0) and self.recon_norm_weight > 0:
-                        loss = loss + self.recon_norm_weight * recon_norm_loss
-                    if getattr(self, "recon_corr_weight", 0.0) and self.recon_corr_weight > 0:
-                        loss = loss + self.recon_corr_weight * recon_corr_loss
-                    if getattr(self, "spec_loss_weight", 0.0) and self.spec_loss_weight > 0:
-                        loss = loss + float(self.spec_loss_weight) * spec_loss_total
-
-                # backward & step
-                if self.use_amp:
-                    self.scaler.scale(loss).backward()
-                    if self.grad_clip > 0:
-                        try:
-                            self.scaler.unscale_(self.optimizer)
-                        except Exception:
-                            pass
-                        torch.nn.utils.clip_grad_norm_(list(self.model.parameters()) + list(self.aligner.parameters()), self.grad_clip)
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                else:
-                    loss.backward()
-                    if self.grad_clip > 0:
-                        torch.nn.utils.clip_grad_norm_(list(self.model.parameters()) + list(self.aligner.parameters()), self.grad_clip)
-                    self.optimizer.step()
-
-
-                # stats
-                total_loss += float(loss.detach().cpu())
-                total_align += float(align_loss.detach().cpu())
-                total_temp += float(temp_loss.detach().cpu())
-                total_recon += float(recon_loss.detach().cpu())
-                total_recon_norm += float(recon_norm_loss.detach().cpu()) if isinstance(recon_norm_loss, torch.Tensor) else 0.0
-                total_spec += float(spec_loss_total.detach().cpu()) if isinstance(spec_loss_total, torch.Tensor) else 0.0
-                batches += 1
-
-                if data_idx == 0:
-                    self.logger.info(f"[Train] epoch={epoch} batch=0 recon_losses={recon_losses_per_nt}")
-                    if batch_alphas:
-                        for nt, a in batch_alphas.items():
-                            if isinstance(a, torch.Tensor):
-                                try:
-                                    self.logger.info(f"[Train] batch alpha {nt} sample first5: {a.view(-1)[:5].cpu().tolist()}")
-                                except Exception:
-                                    self.logger.info(f"[Train] batch alpha {nt}: tensor")
-                            else:
-                                self.logger.info(f"[Train] batch alpha {nt}: {a}")
-
-            # epoch end
-            avg_total = total_loss / batches
-            avg_align = total_align / batches
-            avg_temp = total_temp / batches
-            avg_recon = total_recon / batches
-            avg_recon_norm = total_recon_norm / batches
-            avg_spec = total_spec / batches
-
-            self.loss_log.setdefault("total", []).append(avg_total)
-            self.loss_log.setdefault("align", []).append(avg_align)
-            self.loss_log.setdefault("temp", []).append(avg_temp)
-            self.loss_log.setdefault("recon", []).append(avg_recon)
-            self.loss_log.setdefault("recon_norm", []).append(avg_recon_norm)
-            self.loss_log.setdefault("spec", []).append(avg_spec)
-
-            self.scheduler.step()
-
-            rel_error_epoch = {}
-            # prefer denormed recon (recon_seq_scaled) for epoch-level relative error if available
-            for nt in self.metadata[0]:
-                if isinstance(recon_seq_scaled, dict) and nt in recon_seq_scaled:
-                    recon_final = recon_seq_scaled[nt]
-                else:
-                    recon_final = recon_seq_dict[nt]
-                rel_error_epoch[nt] = self._compute_relative_error({nt: recon_final}, data, self.metadata)[nt]
-                if verbose:
-                    try:
-                        self.logger.info(f"[Debug:{nt}] recon mean={recon_final.mean():.5f}, std={recon_final.std():.5f}")
-                    except Exception:
-                        pass
-
-            # scale diagnostics
-            try:
-                scale_info = {}
-                for nt in self.metadata[0]:
-                    val = None
-                    grad_norm = None
-                    dec = getattr(self.model, "denorm_decoders", None)
-                    if dec is not None and hasattr(dec, "get_scale"):
-                        try:
-                            scale_tensor = dec.get_scale(nt)
-                            val = float(scale_tensor.detach().mean().cpu())
-                            if hasattr(dec, f"log_scale_{nt}"):
-                                p = getattr(dec, f"log_scale_{nt}")
-                                grad_norm = float(p.grad.detach().norm().cpu()) if (p.grad is not None) else None
-                            elif hasattr(dec, f"scale_{nt}"):
-                                p = getattr(dec, f"scale_{nt}")
-                                grad_norm = float(p.grad.detach().norm().cpu()) if (p.grad is not None) else None
-                        except Exception:
-                            val = None
-                            grad_norm = None
-                    else:
-                        for name, p in self.model.named_parameters():
-                            if nt in name and ("scale" in name or "log_scale" in name):
-                                try:
-                                    if "log_scale" in name:
-                                        val = float(torch.exp(p.detach()).mean().cpu())
-                                    else:
-                                        val = float(p.detach().mean().cpu())
-                                    grad_norm = float(p.grad.detach().norm().cpu()) if (p.grad is not None) else None
-                                    break
-                                except Exception:
-                                    continue
-                    scale_info[nt] = {"scale_mean": val, "scale_grad_norm": grad_norm}
-                self.logger.info(f"[ScaleDiag epoch={epoch}] " + ", ".join([f"{k}: mean={v['scale_mean']:.4f} grad_norm={v['scale_grad_norm']}" for k, v in scale_info.items()]))
-            except Exception as e:
-                self.logger.warning(f"[ScaleDiag] failed: {e}")
-
-            if verbose:
-                self.logger.info(
-                    f"[Epoch {epoch:3d}] total={avg_total:.6f} align={avg_align:.6f} "
-                    f"temp={avg_temp:.6f} recon={avg_recon:.6f} recon_norm={avg_recon_norm:.6f} spec={avg_spec:.6f} time={time.time()-start:.2f}s"
-                )
-                self.logger.info(f"[Epoch {epoch}] relative_error={rel_error_epoch}")
-                self._log_reconstruction_histogram(recon_seq_dict, self.metadata)
-
-    # Helpers (changed: safer freeze that preserves denorm/decoder params)
-    def _set_scale_requires_grad(self, flag: bool):
-        """
-        Only toggle requires_grad for true bookkeeping scale params (log_scale, scalar scale variables),
-        but preserve denorm/decoder parameters. Also restore original flags if flag is True.
-        """
-        changed = 0
-        # If setting to True, restore original states recorded at init
-        if flag:
-            for name, p in self.model.named_parameters():
-                if name in self._orig_requires_grad_map:
-                    try:
-                        p.requires_grad = self._orig_requires_grad_map[name]
-                    except Exception:
-                        pass
-            self.logger.info(f"[Scale] restored requires_grad from original map")
-            return
-
-        # When disabling, only disable explicit bookkeeping scales, not denorm/decoder params
-        for name, p in self.model.named_parameters():
-            if ("log_scale" in name) or ("scale_" in name and "scale_fixed" not in name):
-                # skip denorm/decoder names even if they contain 'scale'
-                if "denorm_decoders" in name or "feature_decoders" in name or "decoder_input_proj" in name:
-                    continue
-                try:
-                    p.requires_grad = False
-                    changed += 1
-                except Exception:
-                    pass
-        self.logger.info(f"[Scale] set requires_grad=False for {changed} params (conservative freeze)")
-
-    def _compute_relative_error(self, recon_seq_scaled, data, metadata, eps=1e-8, debug=False):
-        rel_error = {}
-        for nt in metadata[0]:
-            if nt not in recon_seq_scaled:
-                continue
-            recon = recon_seq_scaled[nt]
-            target = getattr(data[nt], "x_seq")
-            target_res = self._resample_time(target.to(self.device), recon.shape[1])
-            Nr, Tr, Fr = recon.shape
-            Nt, Tt, Ft = target_res.shape
-            mN, mT, mF = min(Nr, Nt), min(Tr, Tt), min(Fr, Ft)
-            r = recon[:mN, :mT, :mF]
-            t = target_res[:mN, :mT, :mF]
-            diff_norm = torch.norm(r - t)
-            target_norm = torch.norm(t) + eps
-            rel = diff_norm / target_norm
-            rel_error[nt] = rel.item()
-            if debug:
-                r_mean, r_std = r.mean().item(), r.std().item()
-                t_mean, t_std = t.mean().item(), t.std().item()
-                print(f"[RelError:{nt}] recon mean={r_mean:.5f} std={r_std:.5f} target mean={t_mean:.5f} std={t_std:.5f} rel_error={rel.item():.5f}")
-        return rel_error
-
-    def _log_reconstruction_histogram(self, recon_seq_scaled, metadata, bins=10):
-        for nt in metadata[0]:
-            if nt not in recon_seq_scaled:
-                continue
-            x = recon_seq_scaled[nt].detach().flatten().cpu().numpy()
-            if x.size == 0:
-                continue
-            hist, bin_edges = np.histogram(x, bins=bins)
-            self.logger.info(
-                f"[Hist] {nt} bins={bins} | min={x.min():.4f} max={x.max():.4f} mean={x.mean():.4f} std={x.std():.4f}"
-            )
-
+    # ----------------------------------------------------------------------
+    # 保存 / 加载
+    # ----------------------------------------------------------------------
     def save_model(self, path: Union[str, os.PathLike]):
         os.makedirs(os.path.dirname(str(path)), exist_ok=True)
         payload = {
             "model": self.model.state_dict(),
-            "aligner": self.aligner.state_dict(),
+            "aligner": self.aligner.state_dict() if hasattr(self, "aligner") else None,
             "optimizer": self.optimizer.state_dict() if hasattr(self, "optimizer") else None,
             "scheduler": self.scheduler.state_dict() if hasattr(self, "scheduler") else None,
         }
@@ -889,15 +1015,20 @@ class DynamicHeteroTrainer:
 
     def load_model(self, path: Union[str, os.PathLike]):
         ckpt = torch.load(str(path), map_location=self.device)
-        self.model.load_state_dict(ckpt["model"])
-        try:
-            if "aligner" in ckpt and ckpt["aligner"] is not None:
+        self.model.load_state_dict(ckpt.get("model", ckpt))
+        if "aligner" in ckpt and ckpt["aligner"] is not None and hasattr(self, "aligner"):
+            try:
                 self.aligner.load_state_dict(ckpt["aligner"])
-        except Exception:
-            self.logger.warning("[Load] aligner state incompatible")
-        try:
-            if "optimizer" in ckpt and "optimizer" in ckpt and ckpt["optimizer"] is not None:
+            except Exception:
+                self.logger.warning("[Load] Failed to load aligner state_dict")
+        if "optimizer" in ckpt and ckpt["optimizer"] is not None and hasattr(self, "optimizer"):
+            try:
                 self.optimizer.load_state_dict(ckpt["optimizer"])
-        except Exception:
-            self.logger.warning("[Load] optimizer state incompatible")
+            except Exception:
+                self.logger.warning("[Load] Failed to load optimizer state_dict")
+        if "scheduler" in ckpt and ckpt["scheduler"] is not None and hasattr(self, "scheduler"):
+            try:
+                self.scheduler.load_state_dict(ckpt["scheduler"])
+            except Exception:
+                self.logger.warning("[Load] Failed to load scheduler state_dict")
         self.logger.info(f"[Load] loaded {path}")
