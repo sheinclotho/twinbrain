@@ -12,7 +12,7 @@ import logging
 from utils.config import Config
 from utils.logging_utils import log_stage, get_logger
 from utils.analysis import compute_xcorr_best_lag
-# Removed deprecated: from stim_align import batch_generate_stim
+# Deprecated: from stim_align import batch_generate_stim
 from mapper.atlas_mapper import BrainAtlas
 from train.hetero_trainer import DynamicHeteroTrainer
 from utils.function import (
