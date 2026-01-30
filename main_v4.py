@@ -342,7 +342,7 @@ def main():
         trainer.batch_rescale_cfg["enable"] = False
         trainer.use_batch_rescale = False
         trainer.align_weight = 1.0
-        trainer.temp_weight = 1.0
+        trainer.temp_weight = 5.0
         # keep conservative recon_feat_var_weight for now
         trainer.recon_feat_var_weight = 0.0
         trainer.scale_only_epochs = 5
