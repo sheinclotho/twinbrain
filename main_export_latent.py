@@ -28,7 +28,7 @@ from train.hetero_trainer import DynamicHeteroTrainer
 
 # 复用 main_v4.py 的工具函数
 from utils.utils import plot_recon_vs_target  # 这里暂时不使用，只是说明可以用
-from stim_align import batch_generate_stim
+# Deprecated: from stim_align import batch_generate_stim
 # from node_generator import generate_nodes_all_regions  # Unused - graph built via build_hetero_graph
 # from edge_computer import generate_edges_with_dti_fallback  # Module does not exist
 from mapper.atlas_mapper import BrainAtlas
@@ -348,8 +348,9 @@ def main():
             hetero_graphs = torch.load(hetero_graphs_cache, map_location="cpu", weights_only=False)
         else:
             logging.info("[CACHE MISS] running preprocessing + graph building")
-            stim = batch_generate_stim(subj)
-            torch.save(stim, stim_cache)
+            # Deprecated: stim = batch_generate_stim(subj)
+            stim = None  # stim functionality has been deprecated
+            # Removed: torch.save(stim, stim_cache)
 
             fmri_data = load_fmri(
                 func_dir=PATHS["func_dir"],
@@ -370,7 +371,8 @@ def main():
             nodes = build_nodes(atlas)
             save_nodes_json(nodes, PATHS["nodes_json"])
 
-            hetero_graphs = build_hetero_graph(fmri_data, eeg_data, stim_dict=stim)
+            # Build heterogeneous graphs without stim (deprecated functionality)
+            hetero_graphs = build_hetero_graph(fmri_data, eeg_data, stim_dict=None)
             torch.save(hetero_graphs, hetero_graphs_cache)
 
         # === Trainer 初始化（参考 main_v4 的设置），但不跑 train ===
