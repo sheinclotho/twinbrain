@@ -27,11 +27,11 @@ except Exception:
 
 from utils.utils import plot_recon_vs_target
 from stim_align import batch_generate_stim
-from node_generator import generate_nodes_all_regions
-from edge_computer import generate_edges_with_dti_fallback
+# from node_generator import generate_nodes_all_regions  # Unused - graph built via build_hetero_graph
+# from edge_computer import generate_edges_with_dti_fallback  # Module does not exist
 from mapper.atlas_mapper import BrainAtlas
-from mapper.bids_mapper import BIDSMapper
-from mapper.eeg_mapper import EEGMapper
+# from mapper.bids_mapper import BIDSMapper  # Unused
+# from mapper.eeg_mapper import EEGMapper  # Unused
 from mapper.multi_modal_mapper import MultiModalMapper
 from train.hetero_trainer import DynamicHeteroTrainer
 # optional batch rescale utility
@@ -374,38 +374,38 @@ def main():
         except Exception as e:
             logging.warning(f"[Run] failed to rebuild optimizer for scale lr: {e}")
 
-            # --- Insert this right after you rebuild trainer.optimizer/trainer.scheduler (i.e. after the "rebuilt optimizer" log)
-            # Run a fresh set of diagnostics now that optimizer / lr multipliers are in place.
+        # --- Run diagnostics after rebuilding trainer.optimizer/trainer.scheduler
+        # Run a fresh set of diagnostics now that optimizer / lr multipliers are in place.
 
-            # ensure diagnostic dir
-            trainer.diagnostic_dir = getattr(trainer, "diagnostic_dir", trainer.diagnostic_dir or str(result_dir / "diagnostics"))
-            os.makedirs(trainer.diagnostic_dir, exist_ok=True)
+        # ensure diagnostic dir
+        trainer.diagnostic_dir = getattr(trainer, "diagnostic_dir", trainer.diagnostic_dir or str(result_dir / "diagnostics"))
+        os.makedirs(trainer.diagnostic_dir, exist_ok=True)
 
-            print("[PRE-FINETUNE DIAG] Running forward diagnostics with new optimizer/lr groups...")
-            try:
-                if run_forward_diagnostics is not None:
-                    diag_out = run_forward_diagnostics(trainer, do_autoscale=False)
-                    print("[PRE-FINETUNE DIAG] run_forward_diagnostics returned summary keys:", list(diag_out.get("summary", {}).keys()))
-                else:
-                    print("[PRE-FINETUNE DIAG] run_forward_diagnostics not available")
-            except Exception as e:
-                print("[PRE-FINETUNE DIAG] run_forward_diagnostics failed:", e)
+        print("[PRE-FINETUNE DIAG] Running forward diagnostics with new optimizer/lr groups...")
+        try:
+            if run_forward_diagnostics is not None:
+                diag_out = run_forward_diagnostics(trainer, do_autoscale=False)
+                print("[PRE-FINETUNE DIAG] run_forward_diagnostics returned summary keys:", list(diag_out.get("summary", {}).keys()))
+            else:
+                print("[PRE-FINETUNE DIAG] run_forward_diagnostics not available")
+        except Exception as e:
+            print("[PRE-FINETUNE DIAG] run_forward_diagnostics failed:", e)
 
 
-            # compute best lag for fmri (useful to decide if shift-invariant needed)
-            try:
-                xres = _compute_xcorr_best_lag(trainer, nt="fmri", node_idx=0, feat_idx=0)
-                print("[PRE-FINETUNE XCORR]", xres)
-            except Exception as e:
-                print("[PRE-FINETUNE XCORR] failed:", e)
+        # compute best lag for fmri (useful to decide if shift-invariant needed)
+        try:
+            xres = _compute_xcorr_best_lag(trainer, nt="fmri", node_idx=0, feat_idx=0)
+            print("[PRE-FINETUNE XCORR]", xres)
+        except Exception as e:
+            print("[PRE-FINETUNE XCORR] failed:", e)
 
-            # optional: save a quick checkpoint before finetune
-            try:
-                ckpt_path = result_dir / "hetero_gnn_pre_finetune.pt"
-                trainer.save_model(ckpt_path)
-                print("[PRE-FINETUNE] saved checkpoint to", ckpt_path)
-            except Exception as e:
-                print("[PRE-FINETUNE] failed to save checkpoint:", e)
+        # optional: save a quick checkpoint before finetune
+        try:
+            ckpt_path = result_dir / "hetero_gnn_pre_finetune.pt"
+            trainer.save_model(ckpt_path)
+            print("[PRE-FINETUNE] saved checkpoint to", ckpt_path)
+        except Exception as e:
+            print("[PRE-FINETUNE] failed to save checkpoint:", e)
 
         finetune_epochs = 80
         logging.info(f"[Run] Stage 2: finetune for {finetune_epochs} epochs")

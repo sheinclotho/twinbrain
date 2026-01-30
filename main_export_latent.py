@@ -29,8 +29,8 @@ from train.hetero_trainer import DynamicHeteroTrainer
 # 复用 main_v4.py 的工具函数
 from utils.utils import plot_recon_vs_target  # 这里暂时不使用，只是说明可以用
 from stim_align import batch_generate_stim
-from node_generator import generate_nodes_all_regions
-from edge_computer import generate_edges_with_dti_fallback
+# from node_generator import generate_nodes_all_regions  # Unused - graph built via build_hetero_graph
+# from edge_computer import generate_edges_with_dti_fallback  # Module does not exist
 from mapper.atlas_mapper import BrainAtlas
 from mapper.bids_mapper import BIDSMapper
 from mapper.eeg_mapper import EEGMapper
