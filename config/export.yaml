@@ -1,0 +1,42 @@
+# TwinBrain Export Latent Configuration
+# Configuration for exporting latent representations for visualization
+
+version: "export"
+description: "Export latent representations for Unity visualization"
+
+# Model loading
+model:
+  checkpoint_path: null  # Will be set from command line or use latest
+  hidden_dim: 128
+  num_layers: 2
+  decoder_layers: 3
+
+# Export settings
+export:
+  output_format: "json"  # json, npy, or both
+  export_dir: "exports"
+  
+  # Latent prediction
+  prediction:
+    enabled: true
+    future_steps: 50  # Number of future time steps to predict
+    
+  # Data normalization for export
+  normalization:
+    method: "l2"  # l2, minmax, or zscore
+    
+# Data processing
+data:
+  use_cache: true
+  cache_dir: "cache"
+  
+  atlas:
+    name: "Schaefer200"
+    n_parcels: 200
+    networks: 7
+
+# Output
+output:
+  save_metadata: true
+  save_predictions: true
+  save_ground_truth: true

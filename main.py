@@ -166,9 +166,11 @@ def main():
             logger.info("Training workflow completed successfully")
             
         elif args.workflow == 'export':
-            logger.error("Export workflow not yet implemented")
-            logger.info("Please use main_export_latent.py for now")
-            return 1
+            logger.info("Starting export workflow")
+            from workflows.export_latent import run_export
+            subject = args.subject or "sub-01"
+            run_export(config, subject=subject)
+            logger.info("Export workflow completed")
             
         elif args.workflow == 'infer':
             logger.error("Inference workflow not yet implemented")
