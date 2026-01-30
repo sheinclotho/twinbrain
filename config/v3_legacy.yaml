@@ -1,0 +1,76 @@
+# TwinBrain v3 Training Configuration (Legacy)
+# This configuration represents the original v3 training parameters
+# Kept for backward compatibility and experiment reproduction
+
+version: "v3"
+description: "Original training configuration (deprecated)"
+
+# Training parameters
+training:
+  warmup_epochs: 5
+  warmup_run_epochs: 10  # warmup_epochs + 5
+  finetune_epochs: 40
+  batch_size: 1
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  
+  feature_lr_mul: 12.0
+  scale_lr_mul: 10.0
+  
+  scheduler:
+    type: "StepLR"
+    step_size: 30
+    gamma: 0.7
+
+# Model architecture
+model:
+  hidden_dim: 128
+  num_layers: 2
+  decoder_layers: 2  # Shallower decoder than v4
+  dropout: 0.1
+  
+  encoder:
+    use_batch_norm: true
+    activation: "relu"
+  
+  decoder:
+    use_residual: true
+    activation: "relu"
+
+# Loss function weights
+loss:
+  recon_weight: 1.0
+  recon_norm_weight: 3.0
+  recon_corr_weight: 2.0
+  recon_feat_var_weight: 0.02
+  temp_weight: 1.0  # Weaker temporal alignment than v4
+  
+# Auto-alignment settings
+alignment:
+  auto_align: true
+  auto_align_scope: "warmup"
+  auto_align_max_lag: 150
+  
+# Data processing
+data:
+  use_cache: true
+  cache_dir: "cache"
+  
+  atlas:
+    name: "Schaefer200"
+    n_parcels: 200
+    networks: 7
+
+# Diagnostics and logging
+diagnostics:
+  enabled: true
+  save_plots: true
+  diagnostic_dir: "diagnostics"
+  plot_nodes: [0, 1, 2]
+  
+# Output settings
+output:
+  save_checkpoints: true
+  checkpoint_interval: 20
+  save_final_model: true
+  results_dir: "results"
