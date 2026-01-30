@@ -90,7 +90,6 @@ def main():
 
         if eeg_data_cache.exists() and hetero_graphs_cache.exists():
             logging.info("[FULL CACHE HIT] Loading cached preprocessed data")
-            stim = torch.load(stim_cache, map_location="cpu", weights_only=False)
             hetero_graphs = torch.load(hetero_graphs_cache, map_location="cpu", weights_only=False)
         else:
             logging.info("[CACHE MISS] running preprocessing + graph building")
