@@ -6,30 +6,67 @@
 
 **核心目标**: 构建一个能够真实模拟大脑动态、预测未来状态、响应虚拟刺激的数字孪生系统。
 
+**实施状态说明**:
+- ✅ **已实现**: 功能已经实现并集成到系统中
+- 🚧 **进行中**: 正在开发或部分实现
+- 📋 **待实现**: 已规划但尚未开始实施
+
 ---
 
 ## 🎯 核心研究方向
 
-### 1. 增强预测能力
+### 1. 增强预测能力 ✅ 已实现 (部分)
 
-#### 1.1 多步未来预测
+#### 1.1 多步未来预测 ✅ 已实现（已优化）
+
+**实施状态**: ✅ **已完成并优化** (2026-02-01, 更新于 2026-02-01)
 
 **当前状态**:
-- 模型主要focus在重建当前状态
-- 缺少显式的未来状态预测机制
+- ✅ 已实现 PredictorHead 模块，支持多步未来预测
+- ✅ 集成到 DynamicHeteroTrainer 中
+- ✅ 支持通过配置文件启用/禁用
+- ✅ 支持自定义预测步数和损失权重
+- ✅ **新增**: 支持配置上下文长度（context_length）
 
-**优化方向**:
+**实现位置**:
+- `train/predictor.py`: PredictorHead 和 ConditionalPredictor 类
+- `train/hetero_trainer.py`: 集成预测功能到训练器
+- `config/default.yaml`: prediction 配置节
 
-##### A. 引入预测模块
+**使用方法**:
+```yaml
+# 在配置文件中启用预测
+prediction:
+  enabled: true         # 启用多步预测
+  context_length: 50    # 使用最后50步作为上下文
+  steps: 10             # 预测未来10步
+  weight: 0.1           # 预测损失权重
+# 含义：使用最后50步预测接下来的10步
+```
+
+**优化点** (2026-02-01):
+- ✅ 增加 `context_length` 参数，明确指定"用多少步预测多少步"
+- ✅ 避免使用过长历史导致计算开销过大
+- ✅ 提供更灵活的预测配置
+
+**优化方向**: 📋 待进一步优化
+
+##### A. 引入预测模块 ✅ 已实现
 
 在现有架构中添加预测头：
 
 ```python
 class PredictorHead(nn.Module):
     """预测未来状态的模块"""
-    def __init__(self, hidden_dim, n_future_steps=10):
+    def __init__(
+        self, 
+        hidden_dim, 
+        n_future_steps=10,
+        context_length=None  # NEW: 上下文长度
+    ):
         super().__init__()
         self.n_future_steps = n_future_steps
+        self.context_length = context_length  # 控制使用多少历史步数
         
         # 时序预测网络
         self.predictor_gru = nn.GRU(
@@ -49,9 +86,17 @@ class PredictorHead(nn.Module):
         """
         latent_seq: [B, T_past, H] - 历史潜在序列
         return: [B, T_future, H] - 未来预测序列
+        
+        如果设置了 context_length，仅使用最后 context_length 步
         """
+        # 使用指定长度的上下文
+        if self.context_length and latent_seq.shape[1] > self.context_length:
+            context_seq = latent_seq[:, -self.context_length:, :]
+        else:
+            context_seq = latent_seq
+        
         # 使用历史信息初始化
-        _, hidden = self.predictor_gru(latent_seq)
+        _, hidden = self.predictor_gru(context_seq)
         
         # 自回归预测未来
         predictions = []
@@ -1525,6 +1570,122 @@ TwinBrain系统的设计基于以下意识理论：
 
 ---
 
+## 📊 增强训练监控和日志 ✅ 已实现
+
+**实施状态**: ✅ **已完成** (2026-02-01)
+
+### 实现的功能
+
+#### 1. MetricsTracker 类 ✅
+
+**位置**: `utils/metrics_tracker.py`
+
+**功能**:
+- ✅ 自动记录所有训练指标历史
+- ✅ 保存损失分量（重构、时序、对齐等）
+- ✅ 记录梯度统计信息
+- ✅ 导出 JSON 格式的指标历史
+- ✅ 自动生成训练摘要报告
+
+**使用方法**:
+```yaml
+# config/default.yaml
+metrics:
+  enabled: true
+  output_dir: "metrics"
+```
+
+**代码示例**:
+```python
+from utils.metrics_tracker import MetricsTracker
+
+# 创建追踪器
+tracker = MetricsTracker(output_dir="results/metrics")
+
+# 记录损失分量
+tracker.log_loss_components(
+    epoch=10,
+    recon_loss=0.45,
+    temp_loss=0.32,
+    align_loss=0.28,
+    total_loss=1.05
+)
+
+# 记录梯度统计
+tracker.log_gradient_stats(
+    epoch=10,
+    grad_norm=2.3,
+    grad_max=5.1,
+    grad_min=0.01
+)
+
+# 保存和打印摘要
+tracker.save_metrics()
+tracker.print_summary(last_n_epochs=10)
+```
+
+#### 2. TrainingMonitor 类 ✅
+
+**功能**:
+- ✅ 监控训练进度
+- ✅ 检测训练停滞
+- ✅ 检测异常值（NaN/Inf）
+- ✅ 自动生成警告
+
+#### 3. 集成到训练器 ✅
+
+**位置**: `train/hetero_trainer.py`
+
+**功能**:
+- ✅ 自动记录每个 epoch 的所有损失
+- ✅ 训练结束后自动保存指标
+- ✅ 打印训练摘要
+- ✅ 支持通过配置启用/禁用
+
+### 输出示例
+
+**训练日志**:
+```
+[Epoch  10] total=1.2345 align=0.3456 temp=0.4567 recon=0.4322
+[Epoch  10] relative_error={'fmri': 0.12, 'eeg': 0.15}
+```
+
+**指标摘要**:
+```
+================================================================================
+Metrics Summary (Last 10 epochs)
+================================================================================
+loss/total                     | Latest:   1.2345 | Avg:   1.3456 | Std:   0.1234
+loss/reconstruction            | Latest:   0.4322 | Avg:   0.4500 | Std:   0.0234
+loss/temporal                  | Latest:   0.4567 | Avg:   0.4600 | Std:   0.0123
+loss/alignment                 | Latest:   0.3456 | Avg:   0.3400 | Std:   0.0210
+rel_error/fmri                 | Latest:   0.1200 | Avg:   0.1250 | Std:   0.0050
+rel_error/eeg                  | Latest:   0.1500 | Avg:   0.1550 | Std:   0.0060
+================================================================================
+```
+
+**JSON 输出** (`metrics_history.json`):
+```json
+{
+  "loss/total": [
+    {"epoch": 1, "value": 2.5},
+    {"epoch": 2, "value": 2.3},
+    ...
+  ],
+  "loss/reconstruction": [...],
+  "rel_error/fmri": [...]
+}
+```
+
+### 收益
+
+- ✅ **完整的训练可见性**: 追踪所有重要指标
+- ✅ **易于调试**: 快速定位训练问题
+- ✅ **实验对比**: JSON 格式便于比较不同实验
+- ✅ **自动化**: 无需手动记录，自动保存
+
+---
+
 ## 💡 创新点和贡献
 
 1. **数字孪生脑范式**
@@ -1545,8 +1706,8 @@ TwinBrain系统的设计基于以下意识理论：
 
 ---
 
-**文档版本**: 1.0  
-**最后更新**: 2026-01-31  
+**文档版本**: 1.1  
+**最后更新**: 2026-02-01  
 **维护者**: TwinBrain Development Team
 
 > "探索意识的本质，理解大脑的奥秘。TwinBrain不仅是一个工具，更是通往意识科学的桥梁。"

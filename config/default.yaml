@@ -12,6 +12,7 @@ training:
   batch_size: 1
   learning_rate: 0.0001
   weight_decay: 0.0001
+  gradient_accumulation_steps: 1  # NEW: Accumulate gradients over N steps (1=no accumulation)
   
   # Learning rate multipliers
   feature_lr_mul: 12.0
@@ -47,6 +48,14 @@ loss:
   recon_corr_weight: 2.0
   recon_feat_var_weight: 0.02
   temp_weight: 5.0  # Stronger temporal alignment than v3 (was 1.0)
+
+# Prediction settings (NEW)
+prediction:
+  enabled: false  # Enable multi-step future prediction
+  context_length: 50  # Number of historical steps to use as context
+  steps: 10  # Number of future steps to predict
+  weight: 0.1  # Weight for prediction loss
+  # Example: Use last 50 steps to predict next 10 steps
   
 # Auto-alignment settings
 alignment:
@@ -70,6 +79,11 @@ diagnostics:
   save_plots: true
   diagnostic_dir: "diagnostics"
   plot_nodes: [0, 1, 2]
+
+# Metrics tracking (NEW)
+metrics:
+  enabled: true  # Enable enhanced metrics tracking
+  output_dir: "metrics"  # Directory to save metrics
   
 # Output settings
 output:

@@ -86,6 +86,14 @@ class DynamicHeteroTrainer:
         shift_invariant_temp: float = 1.0,
         auto_align: bool = False,
         auto_align_max_lag: int = 120,
+        # New parameters for enhanced features
+        enable_prediction: bool = False,
+        prediction_context_length: Optional[int] = None,
+        prediction_steps: int = 10,
+        prediction_weight: float = 0.1,
+        enable_metrics_tracking: bool = True,
+        metrics_output_dir: Optional[str] = None,
+        gradient_accumulation_steps: int = 1,  # NEW: Gradient accumulation
     ):
         # ---------- logger ----------
         self.logger = logging.getLogger("DynamicHeteroTrainer")
@@ -145,6 +153,32 @@ class DynamicHeteroTrainer:
         self.auto_align = bool(auto_align)
         self.auto_align_max_lag = int(auto_align_max_lag)
         self._auto_align_cache: Dict[str, int] = {}
+
+        # New: prediction config
+        self.enable_prediction = bool(enable_prediction)
+        self.prediction_context_length = int(prediction_context_length) if prediction_context_length is not None else None
+        self.prediction_steps = int(prediction_steps)
+        self.prediction_weight = float(prediction_weight)
+        
+        # New: gradient accumulation
+        self.gradient_accumulation_steps = max(1, int(gradient_accumulation_steps))
+
+        # New: metrics tracking
+        self.enable_metrics_tracking = bool(enable_metrics_tracking)
+        if self.enable_metrics_tracking:
+            try:
+                from utils.metrics_tracker import MetricsTracker
+                self.metrics_tracker = MetricsTracker(
+                    output_dir=metrics_output_dir,
+                    enabled=True
+                )
+                self.logger.info("Metrics tracking enabled")
+            except ImportError:
+                self.logger.warning("Failed to import MetricsTracker, metrics tracking disabled")
+                self.metrics_tracker = None
+                self.enable_metrics_tracking = False
+        else:
+            self.metrics_tracker = None
 
         # optional logger config helper
         try:
@@ -223,6 +257,26 @@ class DynamicHeteroTrainer:
                         return torch.tensor(0.0, device=a.device if a is not None else "cpu")
                 self.aligner = _DummyAligner()
 
+        # ---------- New: predictor module ----------
+        self.predictor = None
+        if self.enable_prediction:
+            try:
+                from train.predictor import PredictorHead
+                self.predictor = PredictorHead(
+                    hidden_dim=self.hidden_dim,
+                    n_future_steps=self.prediction_steps,
+                    context_length=self.prediction_context_length,
+                    num_layers=3,
+                    num_heads=8,
+                    dropout=self.dropout,
+                    use_residual=True
+                ).to(self.device)
+                context_info = f"context={self.prediction_context_length}" if self.prediction_context_length else "full sequence"
+                self.logger.info(f"Predictor enabled: use {context_info} to predict {self.prediction_steps} steps ahead")
+            except ImportError:
+                self.logger.warning("Failed to import PredictorHead, prediction disabled")
+                self.enable_prediction = False
+
         # ---------- lazy params: dummy forward ----------
         try:
             sample_graph = self.data_list[0].to(self.device)
@@ -280,6 +334,13 @@ class DynamicHeteroTrainer:
             param_groups.append({"params": scale_params, "lr": self.lr * self.scale_lr_mul})
         if aligner_params:
             param_groups.append({"params": aligner_params})
+        
+        # Add predictor parameters if enabled
+        if self.predictor is not None:
+            predictor_params = list(self.predictor.parameters())
+            if predictor_params:
+                param_groups.append({"params": predictor_params})
+                self.logger.info(f"Added {len(predictor_params)} predictor parameters to optimizer")
 
         self.optimizer = torch.optim.Adam(param_groups, lr=self.lr, weight_decay=self.weight_decay)
         self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=30, gamma=0.7)
@@ -531,7 +592,10 @@ class DynamicHeteroTrainer:
 
             for data_idx, data in enumerate(self.data_list):
                 data = data.to(self.device)
-                self.optimizer.zero_grad(set_to_none=True)
+                
+                # Zero gradients only at start of accumulation cycle
+                if data_idx % self.gradient_accumulation_steps == 0:
+                    self.optimizer.zero_grad(set_to_none=True)
 
                 # 1) GraphEncoder
                 enc_out = self.graph_encoder(data)
@@ -602,6 +666,60 @@ class DynamicHeteroTrainer:
                 temp_loss = torch.tensor(0.0, device=self.device)
                 raw_pred_loss_total = torch.tensor(0.0, device=self.device)
                 raw_pred_weight = float(getattr(self, "raw_pred_weight", self.temp_weight))
+                
+                # NEW: Use PredictorHead for prediction if enabled
+                predictor_loss = torch.tensor(0.0, device=self.device)
+                if self.enable_prediction and self.predictor is not None:
+                    # Use PredictorHead for multi-step prediction with sliding window
+                    for nt in self.metadata[0]:
+                        seq = None
+                        if isinstance(proj_seq_dict, dict):
+                            seq = proj_seq_dict.get(nt, None)
+                        elif isinstance(proj_seq_dict, torch.Tensor):
+                            seq = proj_seq_dict
+                        if seq is None or (isinstance(seq, torch.Tensor) and seq.numel() == 0):
+                            continue
+                        if not isinstance(seq, torch.Tensor) or seq.ndim != 3:
+                            continue
+                        
+                        N, T, H = seq.shape
+                        min_required = (self.prediction_context_length or 10) + self.prediction_steps
+                        if T < min_required:
+                            continue
+                        
+                        # Use sliding window to create multiple training samples
+                        # This enables autoregressive learning across the sequence
+                        context_len = self.prediction_context_length or 50
+                        stride = max(1, self.prediction_steps // 2)  # Overlap windows for more samples
+                        
+                        num_windows = 0
+                        window_loss = torch.tensor(0.0, device=self.device)
+                        
+                        # Slide window across the sequence
+                        for start_idx in range(0, T - context_len - self.prediction_steps + 1, stride):
+                            context_start = start_idx
+                            context_end = start_idx + context_len
+                            target_start = context_end
+                            target_end = context_end + self.prediction_steps
+                            
+                            if target_end > T:
+                                break
+                            
+                            # Extract context and target
+                            context_seq = seq[:, context_start:context_end, :]
+                            target_seq = seq[:, target_start:target_end, :]
+                            
+                            # Predict using PredictorHead
+                            predictions, _ = self.predictor(context_seq, return_attention=False)
+                            
+                            # Compute prediction loss for this window
+                            pred_loss = F_nn.mse_loss(predictions, target_seq)
+                            window_loss = window_loss + pred_loss
+                            num_windows += 1
+                        
+                        # Average over all windows
+                        if num_windows > 0:
+                            predictor_loss = predictor_loss + (window_loss / num_windows)
 
                 for nt in self.metadata[0]:
                     seq = None
@@ -814,26 +932,39 @@ class DynamicHeteroTrainer:
                     loss = loss + self.spec_loss_weight * spec_loss_total
                 if raw_pred_loss_total.numel() != 0 and float(raw_pred_loss_total.detach().cpu()) != 0.0:
                     loss = loss + raw_pred_weight * raw_pred_loss_total
+                # NEW: Add PredictorHead loss if enabled
+                if self.enable_prediction and predictor_loss.numel() != 0:
+                    loss = loss + self.prediction_weight * predictor_loss
+                
+                # Scale loss for gradient accumulation
+                if self.gradient_accumulation_steps > 1:
+                    loss = loss / self.gradient_accumulation_steps
 
-                # 12) backward + step
+                # 12) backward + step (with gradient accumulation)
                 if self.use_amp:
                     self.scaler.scale(loss).backward()
-                    if self.grad_clip > 0:
-                        self.scaler.unscale_(self.optimizer)
-                        torch.nn.utils.clip_grad_norm_(
-                            list(self.model.parameters()) + list(self.aligner.parameters()),
-                            self.grad_clip,
-                        )
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
+                    
+                    # Only step optimizer every N accumulation steps
+                    if (data_idx + 1) % self.gradient_accumulation_steps == 0 or (data_idx + 1) == len(self.data_list):
+                        if self.grad_clip > 0:
+                            self.scaler.unscale_(self.optimizer)
+                            params_to_clip = list(self.model.parameters()) + list(self.aligner.parameters())
+                            if self.predictor is not None:
+                                params_to_clip += list(self.predictor.parameters())
+                            torch.nn.utils.clip_grad_norm_(params_to_clip, self.grad_clip)
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
                 else:
                     loss.backward()
-                    if self.grad_clip > 0:
-                        torch.nn.utils.clip_grad_norm_(
-                            list(self.model.parameters()) + list(self.aligner.parameters()),
-                            self.grad_clip,
-                        )
-                    self.optimizer.step()
+                    
+                    # Only step optimizer every N accumulation steps
+                    if (data_idx + 1) % self.gradient_accumulation_steps == 0 or (data_idx + 1) == len(self.data_list):
+                        if self.grad_clip > 0:
+                            params_to_clip = list(self.model.parameters()) + list(self.aligner.parameters())
+                            if self.predictor is not None:
+                                params_to_clip += list(self.predictor.parameters())
+                            torch.nn.utils.clip_grad_norm_(params_to_clip, self.grad_clip)
+                        self.optimizer.step()
 
                 # 13) accumulate stats
                 total_loss += float(loss.detach().cpu())
@@ -876,6 +1007,21 @@ class DynamicHeteroTrainer:
                 rel_error_epoch = self._compute_relative_error(recon_final_map, data, self.metadata)
             except Exception:
                 self.logger.warning("[Train] relative error computation failed for this epoch")
+
+            # New: Log metrics
+            if self.metrics_tracker is not None:
+                self.metrics_tracker.log_loss_components(
+                    epoch=epoch,
+                    recon_loss=avg_recon,
+                    temp_loss=avg_temp,
+                    align_loss=avg_align,
+                    total_loss=avg_total,
+                    recon_norm=avg_recon_norm,
+                    spec=avg_spec
+                )
+                # Log relative errors
+                for nt, err in rel_error_epoch.items():
+                    self.metrics_tracker.log_epoch(epoch, {f'rel_error/{nt}': err})
 
             # 16) early stopping / LR 调整
             monitor_val = rel_error_epoch.get(monitor_nt, avg_recon)
@@ -921,6 +1067,11 @@ class DynamicHeteroTrainer:
                     f"spec={avg_spec:.6f} time={time.time()-start:.2f}s"
                 )
                 self.logger.info(f"[Epoch {epoch}] relative_error={rel_error_epoch}")
+
+        # Training completed - save metrics and print summary
+        if self.metrics_tracker is not None:
+            self.metrics_tracker.save_metrics()
+            self.metrics_tracker.print_summary(last_n_epochs=min(10, epochs))
 
     # ----------------------------------------------------------------------
     # Scale freeze / unfreeze

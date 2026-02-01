@@ -12,7 +12,6 @@ import logging
 from utils.config import Config
 from utils.logging_utils import log_stage, get_logger
 from utils.analysis import compute_xcorr_best_lag
-from stim_align import batch_generate_stim
 from mapper.atlas_mapper import BrainAtlas
 from train.hetero_trainer import DynamicHeteroTrainer
 from utils.function import (
@@ -89,26 +88,18 @@ class TrainingWorkflow:
         cache_dir = result_dir / self.config.get('data.cache_dir', 'cache')
         cache_dir.mkdir(parents=True, exist_ok=True)
         
-        stim_cache = cache_dir / "stim.pt"
         eeg_data_cache = cache_dir / "eeg_data.pt"
         hetero_graphs_cache = cache_dir / "hetero_graphs.pt"
         
         use_cache = self.config.get('data.use_cache', True)
         
         # Check cache
-        if use_cache and stim_cache.exists() and eeg_data_cache.exists() and hetero_graphs_cache.exists():
+        if use_cache and eeg_data_cache.exists() and hetero_graphs_cache.exists():
             logger.info("Loading cached preprocessed data")
-            stim = torch.load(stim_cache, map_location="cpu", weights_only=False)
             eeg_data = torch.load(eeg_data_cache, map_location="cpu", weights_only=False)
             hetero_graphs = torch.load(hetero_graphs_cache, map_location="cpu", weights_only=False)
         else:
             logger.info("Preprocessing data (cache miss or disabled)")
-            
-            # Generate stimulus
-            with log_stage("Stimulus Generation"):
-                stim = batch_generate_stim(subject_dir)
-                if use_cache:
-                    torch.save(stim, stim_cache)
             
             # Discover tasks
             eeg_tasks = discover_eeg_tasks(paths["eeg_dir"])
@@ -147,11 +138,12 @@ class TrainingWorkflow:
                 nodes = build_nodes(atlas)
                 save_nodes_json(nodes, paths["nodes_json"])
                 
-                hetero_graphs = build_hetero_graph(fmri_data, eeg_data, stim_dict=stim)
+                # Build hetero graph without stimulus data (stim_dict is optional)
+                hetero_graphs = build_hetero_graph(fmri_data, eeg_data, stim_dict=None)
                 if use_cache:
                     torch.save(hetero_graphs, hetero_graphs_cache)
         
-        return stim, eeg_data, hetero_graphs
+        return eeg_data, hetero_graphs
     
     def _create_trainer(self, hetero_graphs, result_dir: Path) -> DynamicHeteroTrainer:
         """Create and configure trainer from config."""
@@ -170,6 +162,16 @@ class TrainingWorkflow:
             feature_lr_mul=cfg.get('training.feature_lr_mul', 12.0),
             scale_lr_mul=cfg.get('training.scale_lr_mul', 10.0),
             warmup_epochs=cfg.get('training.warmup_epochs', 5),
+            # New: prediction parameters
+            enable_prediction=cfg.get('prediction.enabled', False),
+            prediction_context_length=cfg.get('prediction.context_length', None),
+            prediction_steps=cfg.get('prediction.steps', 10),
+            prediction_weight=cfg.get('prediction.weight', 0.1),
+            # New: metrics tracking
+            enable_metrics_tracking=cfg.get('metrics.enabled', True),
+            metrics_output_dir=str(result_dir / cfg.get('metrics.output_dir', 'metrics')),
+            # New: gradient accumulation
+            gradient_accumulation_steps=cfg.get('training.gradient_accumulation_steps', 1),
             device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
         )
         
@@ -224,7 +226,7 @@ class TrainingWorkflow:
         
         # Load/generate data
         with log_stage("Data Loading"):
-            stim, eeg_data, hetero_graphs = self._load_or_generate_data(
+            eeg_data, hetero_graphs = self._load_or_generate_data(
                 subject_dir, paths, atlas
             )
         

@@ -4,20 +4,21 @@
 
 **核心特性**:
 - 🧠 多模态脑成像数据整合（fMRI、EEG、DTI）
-- 🔮 大脑未来状态预测
+- 🔮 大脑未来状态预测（✅ 新增）
+- 📊 增强训练监控系统（✅ 新增）
 - 🎯 虚拟刺激和扰动模拟
 - 🌐 Unity前端实时可视化
-- 📊 异构图神经网络建模
+- 📈 异构图神经网络建模
 
 ## 📚 文档
 
 ### 中文文档（推荐）
-- **[系统使用指南](TwinBrain系统使用指南.md)** - 完整的用户指南：安装、配置、训练、预测、Unity集成
-- **[优化方向和研究思路](TwinBrain优化方向和研究思路.md)** - 研究方向、优化策略、未来规划
+- **[系统使用指南](docs/TwinBrain系统使用指南.md)** - 完整的用户指南：安装、配置、训练、预测、Unity集成
+- **[新功能说明](docs/NEW_FEATURES.md)** - 最新功能详解（2026-02-01）🆕
+- **[优化方向和研究思路](OPTIMIZATION_DIRECTIONS.md)** - 研究方向、优化策略、未来规划
 
-### 技术文档
-- [重构总结](REFACTORING_SUMMARY_CN.md) - 代码重构说明和架构优化
-- [重构实施](REFACTORING_IMPLEMENTATION.md) - 实施细节和迁移指南
+### 项目文档
+- [更新历史](CHANGELOG.md) - 版本更新和变更记录
 
 ## 🚀 快速开始
 
@@ -79,7 +80,7 @@ trajectory, metrics = simulator.simulate_response(
 )
 ```
 
-详细说明请参考 [系统使用指南](TwinBrain系统使用指南.md)
+详细说明请参考 [系统使用指南](docs/TwinBrain系统使用指南.md)
 
 ## 💡 核心功能
 
@@ -123,12 +124,12 @@ trajectory, metrics = simulator.simulate_response(
 
 完整的使用说明、API文档、配置参数详解，请参考：
 
-- [系统使用指南](TwinBrain系统使用指南.md) - 从安装到高级功能
-- [优化方向和研究思路](TwinBrain优化方向和研究思路.md) - 研究方向和技术路线
+- [系统使用指南](docs/TwinBrain系统使用指南.md) - 从安装到高级功能
+- [优化方向和研究思路](OPTIMIZATION_DIRECTIONS.md) - 研究方向和技术路线
 
 ## 🔬 研究方向
 
-我们正在探索以下方向（详见[优化方向文档](TwinBrain优化方向和研究思路.md)）：
+我们正在探索以下方向（详见[优化方向文档](OPTIMIZATION_DIRECTIONS.md)）：
 
 1. **增强预测能力**
    - 多步未来预测
@@ -263,7 +264,18 @@ python main.py train --config config/v3_legacy.yaml
 
 ## 📝 最近更新
 
-查看 [REFACTORING_SUMMARY_CN.md](REFACTORING_SUMMARY_CN.md) 了解详细的重构内容和改进建议。
+查看 [CHANGELOG.md](CHANGELOG.md) 了解详细的版本更新和变更记录。
+
+### 重大更新（2026-02-01）
+
+#### 代码清理
+- ✅ **移除废弃代码** - 删除 stim_align.py 及相关调用
+- ✅ **简化训练流程** - Stimulus 数据处理改为可选
+
+#### 文档重组
+- ✅ **清理冗余文档** - 移除重构相关的临时文档
+- ✅ **统一文档结构** - 3类核心文档，清晰明了
+- ✅ **创建 docs/ 文件夹** - 用户指南独立目录
 
 ### 重大更新（2026-01-30）
 
