@@ -86,6 +86,12 @@ class DynamicHeteroTrainer:
         shift_invariant_temp: float = 1.0,
         auto_align: bool = False,
         auto_align_max_lag: int = 120,
+        # New parameters for enhanced features
+        enable_prediction: bool = False,
+        prediction_steps: int = 10,
+        prediction_weight: float = 0.1,
+        enable_metrics_tracking: bool = True,
+        metrics_output_dir: Optional[str] = None,
     ):
         # ---------- logger ----------
         self.logger = logging.getLogger("DynamicHeteroTrainer")
@@ -145,6 +151,28 @@ class DynamicHeteroTrainer:
         self.auto_align = bool(auto_align)
         self.auto_align_max_lag = int(auto_align_max_lag)
         self._auto_align_cache: Dict[str, int] = {}
+
+        # New: prediction config
+        self.enable_prediction = bool(enable_prediction)
+        self.prediction_steps = int(prediction_steps)
+        self.prediction_weight = float(prediction_weight)
+
+        # New: metrics tracking
+        self.enable_metrics_tracking = bool(enable_metrics_tracking)
+        if self.enable_metrics_tracking:
+            try:
+                from utils.metrics_tracker import MetricsTracker
+                self.metrics_tracker = MetricsTracker(
+                    output_dir=metrics_output_dir,
+                    enabled=True
+                )
+                self.logger.info("Metrics tracking enabled")
+            except ImportError:
+                self.logger.warning("Failed to import MetricsTracker, metrics tracking disabled")
+                self.metrics_tracker = None
+                self.enable_metrics_tracking = False
+        else:
+            self.metrics_tracker = None
 
         # optional logger config helper
         try:
@@ -223,6 +251,24 @@ class DynamicHeteroTrainer:
                         return torch.tensor(0.0, device=a.device if a is not None else "cpu")
                 self.aligner = _DummyAligner()
 
+        # ---------- New: predictor module ----------
+        self.predictor = None
+        if self.enable_prediction:
+            try:
+                from train.predictor import PredictorHead
+                self.predictor = PredictorHead(
+                    hidden_dim=self.hidden_dim,
+                    n_future_steps=self.prediction_steps,
+                    num_layers=3,
+                    num_heads=8,
+                    dropout=self.dropout,
+                    use_residual=True
+                ).to(self.device)
+                self.logger.info(f"Predictor enabled: {self.prediction_steps} steps ahead")
+            except ImportError:
+                self.logger.warning("Failed to import PredictorHead, prediction disabled")
+                self.enable_prediction = False
+
         # ---------- lazy params: dummy forward ----------
         try:
             sample_graph = self.data_list[0].to(self.device)
@@ -280,6 +326,13 @@ class DynamicHeteroTrainer:
             param_groups.append({"params": scale_params, "lr": self.lr * self.scale_lr_mul})
         if aligner_params:
             param_groups.append({"params": aligner_params})
+        
+        # Add predictor parameters if enabled
+        if self.predictor is not None:
+            predictor_params = list(self.predictor.parameters())
+            if predictor_params:
+                param_groups.append({"params": predictor_params})
+                self.logger.info(f"Added {len(predictor_params)} predictor parameters to optimizer")
 
         self.optimizer = torch.optim.Adam(param_groups, lr=self.lr, weight_decay=self.weight_decay)
         self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=30, gamma=0.7)
@@ -877,6 +930,21 @@ class DynamicHeteroTrainer:
             except Exception:
                 self.logger.warning("[Train] relative error computation failed for this epoch")
 
+            # New: Log metrics
+            if self.metrics_tracker is not None:
+                self.metrics_tracker.log_loss_components(
+                    epoch=epoch,
+                    recon_loss=avg_recon,
+                    temp_loss=avg_temp,
+                    align_loss=avg_align,
+                    total_loss=avg_total,
+                    recon_norm=avg_recon_norm,
+                    spec=avg_spec
+                )
+                # Log relative errors
+                for nt, err in rel_error_epoch.items():
+                    self.metrics_tracker.log_epoch(epoch, {f'rel_error/{nt}': err})
+
             # 16) early stopping / LR 调整
             monitor_val = rel_error_epoch.get(monitor_nt, avg_recon)
             improved = monitor_val < best_rel - 1e-12
@@ -921,6 +989,11 @@ class DynamicHeteroTrainer:
                     f"spec={avg_spec:.6f} time={time.time()-start:.2f}s"
                 )
                 self.logger.info(f"[Epoch {epoch}] relative_error={rel_error_epoch}")
+
+        # Training completed - save metrics and print summary
+        if self.metrics_tracker is not None:
+            self.metrics_tracker.save_metrics()
+            self.metrics_tracker.print_summary(last_n_epochs=min(10, epochs))
 
     # ----------------------------------------------------------------------
     # Scale freeze / unfreeze

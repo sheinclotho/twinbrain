@@ -2,6 +2,46 @@
 
 ## 2026-02-01
 
+### 新功能实现 🎉
+
+#### 增强训练监控
+- **MetricsTracker**: 完整的训练指标追踪系统
+  - 自动记录所有损失分量
+  - 保存指标历史到 JSON
+  - 生成训练摘要报告
+- **TrainingMonitor**: 训练进度监控
+  - 检测训练停滞
+  - 检测异常值（NaN/Inf）
+  - 自动生成警告
+
+#### 多步未来预测
+- **PredictorHead**: GRU + 注意力机制的预测模块
+  - 支持多步未来状态预测
+  - 自回归预测机制
+  - 可配置预测步数
+- **ConditionalPredictor**: 条件化预测器
+  - 支持基于外部刺激的预测
+  - 适用于 TMS/tACS 效应模拟
+
+#### 配置系统增强
+- 新增 `prediction` 配置节
+  - `enabled`: 启用/禁用预测
+  - `steps`: 预测步数
+  - `weight`: 预测损失权重
+- 新增 `metrics` 配置节
+  - `enabled`: 启用/禁用指标追踪
+  - `output_dir`: 指标保存目录
+
+### 代码优化
+- 集成 PredictorHead 到 DynamicHeteroTrainer
+- 集成 MetricsTracker 到训练流程
+- 更新 workflows/training.py 以支持新功能
+
+### 文档更新
+- 更新 OPTIMIZATION_DIRECTIONS.md，标记已实现的优化
+- 添加详细的使用说明和代码示例
+- 更新文档版本到 1.1
+
 ### 代码清理
 - 移除废弃的 stim_align.py 模块及相关代码调用
 - 简化训练工作流，stimulus 数据处理改为可选

@@ -47,6 +47,12 @@ loss:
   recon_corr_weight: 2.0
   recon_feat_var_weight: 0.02
   temp_weight: 5.0  # Stronger temporal alignment than v3 (was 1.0)
+
+# Prediction settings (NEW)
+prediction:
+  enabled: false  # Enable multi-step future prediction
+  steps: 10  # Number of future steps to predict
+  weight: 0.1  # Weight for prediction loss
   
 # Auto-alignment settings
 alignment:
@@ -70,6 +76,11 @@ diagnostics:
   save_plots: true
   diagnostic_dir: "diagnostics"
   plot_nodes: [0, 1, 2]
+
+# Metrics tracking (NEW)
+metrics:
+  enabled: true  # Enable enhanced metrics tracking
+  output_dir: "metrics"  # Directory to save metrics
   
 # Output settings
 output:

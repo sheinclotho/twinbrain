@@ -162,6 +162,13 @@ class TrainingWorkflow:
             feature_lr_mul=cfg.get('training.feature_lr_mul', 12.0),
             scale_lr_mul=cfg.get('training.scale_lr_mul', 10.0),
             warmup_epochs=cfg.get('training.warmup_epochs', 5),
+            # New: prediction parameters
+            enable_prediction=cfg.get('prediction.enabled', False),
+            prediction_steps=cfg.get('prediction.steps', 10),
+            prediction_weight=cfg.get('prediction.weight', 0.1),
+            # New: metrics tracking
+            enable_metrics_tracking=cfg.get('metrics.enabled', True),
+            metrics_output_dir=str(result_dir / cfg.get('metrics.output_dir', 'metrics')),
             device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
         )
         
