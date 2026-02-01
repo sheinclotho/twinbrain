@@ -27,19 +27,32 @@ class MultiModalMapper:
         align_dim: int = 64,
         align_mode: str = "latent",
         max_time: int = 2000,
-        cross_modal_k: int = 5,
-        cross_modal_thr: float = 50.0,
+        cross_modal_neighbors: int = 5,
+        cross_modal_distance_threshold: float = 50.0,
         verbose: bool = True,
     ):
+        """Initialize MultiModalMapper.
+        
+        Args:
+            fmri_mapper: fMRI data mapper instance.
+            eeg_mapper: EEG data mapper instance.
+            target_dim: Target dimension for projections.
+            align_dim: Alignment dimension.
+            align_mode: Alignment mode ('latent' or other).
+            max_time: Maximum number of time points.
+            cross_modal_neighbors: Number of nearest neighbors for cross-modal edges (k-NN).
+            cross_modal_distance_threshold: Distance threshold in mm for cross-modal edges.
+            verbose: Enable verbose logging.
+        """
         self.fmri_mapper = fmri_mapper
         self.eeg_mapper = eeg_mapper
-        self.target_dim = int(target_dim)
-        self.align_dim = int(align_dim)
+        self.target_dim = target_dim
+        self.align_dim = align_dim
         self.align_mode = align_mode
-        self.max_time = int(max_time)
-        self.cross_modal_k = int(cross_modal_k)
-        self.cross_modal_thr = float(cross_modal_thr)
-        self.verbose = bool(verbose)
+        self.max_time = max_time
+        self.cross_modal_k = cross_modal_neighbors
+        self.cross_modal_thr = cross_modal_distance_threshold
+        self.verbose = verbose
         self._proj_layers: Dict[str, nn.Linear] = {}
         self.align_linear: Optional[nn.Linear] = None
         self.align_R: Optional[nn.Parameter] = None
@@ -108,27 +121,36 @@ class MultiModalMapper:
             self.align_R = nn.Parameter(torch.eye(q, device=device))
 
     # ================================
-    # 关键修复 1：支持 HeteroData["fmri"].times
+    # Extract time vector from HeteroData node
     # ================================
     def _get_time_vector(self, hetero: HeteroData, node_type: str) -> np.ndarray:
+        """Extract time vector from HeteroData node.
+        
+        Checks multiple possible fields in priority order:
+        1. Direct fields: times, time, timestamps, t_seq
+        2. debug_info dict with n_tp and TR
+        3. Inferred from x_seq shape
+        
+        Args:
+            hetero: HeteroData graph.
+            node_type: Node type to extract time from.
+            
+        Returns:
+            Time vector as 1D numpy array.
+            
+        Raises:
+            ValueError: If time cannot be extracted from any source.
         """
-        从 HeteroData[node_type] 提取时间向量（强制简化版本）
-        允许字段:
-            node.times / node.time / node.timestamps / node.t_seq
-            node.debug_info = {'n_tp': int, 'TR': float}
-            或通过 node.x_seq 的形状推断
-        """
-        import numpy as np
         node = hetero[node_type]
 
-        # ---- 1) 直接字段 ----
+        # Direct fields
         for key in ("times", "time", "timestamps", "t_seq"):
             if hasattr(node, key):
                 arr = getattr(node, key)
                 if arr is not None:
                     return np.asarray(arr, dtype=np.float32).reshape(-1)
 
-        # ---- 2) debug_info ----
+        # debug_info
         dbg = getattr(node, "debug_info", None)
         if isinstance(dbg, dict):
             if "n_tp" in dbg:
@@ -136,10 +158,10 @@ class MultiModalMapper:
                 tr = float(dbg.get("TR", 1.0))
                 return (np.arange(n_tp, dtype=np.float32) * tr)
 
-        # ---- 3) 从 x_seq 推断 ----
+        # Infer from x_seq shape
         if hasattr(node, "x_seq") and node.x_seq is not None:
             xseq = node.x_seq
-            # 格式固定为 (N, T, C)
+            # Expected format: (N, T, C)
             if xseq.ndim == 3:
                 n_tp = xseq.shape[1]
                 return (np.arange(n_tp, dtype=np.float32))
@@ -147,15 +169,23 @@ class MultiModalMapper:
         raise ValueError(f"Cannot extract time from node '{node_type}'")
 
     def _validate_and_extract(self, hetero: HeteroData, node_type: str) -> Dict[str, Any]:
+        """Extract x_seq/x, edges, coordinates and other fields from HeteroData node.
+        
+        Assumes:
+          - hetero is HeteroData
+          - hetero[node_type] has x or x_seq attribute
+          - x_seq shape is (N, T, C) or x shape is (N, C)
+          
+        Args:
+            hetero: HeteroData graph.
+            node_type: Node type to extract from.
+            
+        Returns:
+            Dictionary with extracted tensors (x_seq, x_mean, edge_index, pos, fc_matrix).
+            
+        Raises:
+            ValueError: If inputs are invalid.
         """
-        从 HeteroData[node_type] 提取 x_seq/x、边、坐标等标准字段。
-        假设:
-          - hetero 是 HeteroData
-          - hetero[node_type] 至少有 x 或 x_seq
-          - x_seq 形状 (N, T, C) 或 x (N, C)
-        """
-        import torch
-
         if not isinstance(hetero, HeteroData):
             raise ValueError("Input to _validate_and_extract must be HeteroData")
 
@@ -165,51 +195,65 @@ class MultiModalMapper:
         node = hetero[node_type]
         out = {}
 
-        # --- x_seq 或 x ---
+        # Extract x_seq or x
         xseq = getattr(node, "x_seq", None)
         x = getattr(node, "x", None)
 
         if xseq is None and x is None:
             raise ValueError(f"{node_type}: missing both x_seq and x")
 
-        # ---- 标准化为 3D ----
+        # Standardize to 3D
         if xseq is not None:
             t = self._to_tensor(xseq)
         else:
             t = self._to_tensor(x)
         t3 = self._ensure_3d(t)            # (N, T, C)
-        t3 = self._sanitize_numeric(t3)    # 去 NaN / inf
+        t3 = self._sanitize_numeric(t3)    # Remove NaN/inf
 
         out["x_seq"] = t3
         out["x_mean"] = t3.mean(dim=1)     # (N, C)
 
-        # --- edge_index ---
+        # Extract edge_index
         eidx = getattr(node, "edge_index", None)
         if isinstance(eidx, torch.Tensor) and eidx.numel() > 0:
             out["edge_index"] = eidx.long()
         else:
             out["edge_index"] = torch.empty((2, 0), dtype=torch.long)
 
-        # --- pos ---
+        # Extract position
         pos = getattr(node, "pos", None)
         out["pos"] = pos.float() if isinstance(pos, torch.Tensor) else None
 
-        # --- fc_matrix (可选) ---
+        # Extract FC matrix (optional)
         out["fc_matrix"] = getattr(node, "fc_matrix", None)
 
         return out
 
 
     # ================================
-    # 其余函数修复
+    # Temporal alignment and edge building
     # ================================
     def _temporal_align_physical(
         self,
         fmri_x: torch.Tensor,
         eeg_x: torch.Tensor,
         fmri_graph: Any,  # HeteroData
-        eeg_graph: Any   # Data
+        eeg_graph: Any    # Data or HeteroData
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Align fMRI and EEG sequences by physical time through interpolation.
+        
+        Args:
+            fmri_x: fMRI tensor (N, T, C).
+            eeg_x: EEG tensor (N, T, C).
+            fmri_graph: HeteroData containing fMRI time information.
+            eeg_graph: Data/HeteroData containing EEG time information.
+            
+        Returns:
+            Tuple of (aligned_fmri, aligned_eeg) tensors.
+            
+        Raises:
+            ValueError: If time ranges don't overlap.
+        """
         device = fmri_x.device
         t_fmri = torch.from_numpy(self._get_time_vector(fmri_graph, "fmri")).to(device)
         t_eeg = torch.from_numpy(self._get_time_vector(eeg_graph, "eeg")).to(device)
@@ -251,25 +295,35 @@ class MultiModalMapper:
         eeg_pos: torch.Tensor,
         template_path: Optional[str] = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        import os
-        import torch
-
-        # 如果提供路径且文件存在，直接加载模板（只加载 edge_index）
+        """Build cross-modal edges between fMRI and EEG nodes.
+        
+        If template_path exists, loads edge structure from file.
+        Otherwise, computes edges based on k-NN or distance threshold.
+        
+        Args:
+            fmri_pos: fMRI node positions (N_fmri, 3).
+            eeg_pos: EEG node positions (N_eeg, 3).
+            template_path: Optional path to save/load edge template.
+            
+        Returns:
+            Tuple of (edge_index, edge_attr) where edge_index is (2, E) and edge_attr is (E,).
+        """
+        # Load from template if available
         if template_path is not None and os.path.exists(template_path):
             saved = torch.load(template_path)
             edge_index = saved['edge_index']
             self._log(f"[CM] Loaded cross-modal edge template from {template_path}")
 
-            # attr 仍然按照距离计算
+            # Compute edge attributes based on distance
             if fmri_pos is None or eeg_pos is None or edge_index.numel() == 0:
                 edge_attr = torch.empty((0,), dtype=torch.float32)
             else:
-                src, dst = edge_index
                 dist = torch.cdist(fmri_pos, eeg_pos)
+                src, dst = edge_index
                 edge_attr = 1.0 / (dist[src, dst] + 1e-6)
             return edge_index, edge_attr
 
-        # 没有模板或不提供路径，按原逻辑生成
+        # Generate edges if no template or positions missing
         if fmri_pos is None or eeg_pos is None:
             return torch.empty((2, 0), dtype=torch.long), torch.empty((0,), dtype=torch.float32)
 
@@ -297,7 +351,7 @@ class MultiModalMapper:
             edge_index = torch.cat(edge_index_list, dim=1)
             edge_attr = torch.cat(edge_attr_list)
 
-        # 保存模板时只保存 edge_index
+        # Save template (edge_index only)
         if template_path is not None:
             os.makedirs(os.path.dirname(template_path), exist_ok=True)
             torch.save({'edge_index': edge_index}, template_path)
@@ -311,36 +365,47 @@ class MultiModalMapper:
         off_graph: Any,
         fmri_graph: Any,
         stim_dict: Optional[Dict[str, Any]] = None,
-        max_T: Optional[int] = None,  # ← 新增参数！
+        max_T: Optional[int] = None,
     ) -> List[HeteroData]:
-        """
-        完全修复版 + 强制截断 max_T
+        """Build dynamic HeteroData from ON/OFF EEG runs and fMRI.
+        
+        Complete fixed version with max_T truncation support.
+        
+        Args:
+            on_graph: EEG ON condition HeteroData.
+            off_graph: EEG OFF condition HeteroData.
+            fmri_graph: fMRI HeteroData.
+            stim_dict: Optional stimulation time series to inject.
+            max_T: Optional maximum time points to truncate to.
+            
+        Returns:
+            List containing single HeteroData with aligned sequences.
         """
         def _ensure_seq(name, x):
             if x is None:
                 raise ValueError(f"[Dynamic] {name}.x_seq is None")
             if not isinstance(x, torch.Tensor):
-                raise TypeError(f"[Dynamic] {name}.x_seq 必须为 torch.Tensor")
+                raise TypeError(f"[Dynamic] {name}.x_seq must be torch.Tensor")
             if x.dim() != 3:
-                raise ValueError(f"[Dynamic] {name}.x_seq 必须为 3D (N,T,F)，收到 {tuple(x.shape)}")
+                raise ValueError(f"[Dynamic] {name}.x_seq must be 3D (N,T,F), got {tuple(x.shape)}")
             self._log(f"[Dynamic] {name}.x_seq shape = {tuple(x.shape)}")
             return x
 
-        # 1) 合并 EEG
+        # Merge EEG runs
         eeg_merged = self._merge_eeg_runs(on_graph, off_graph)
         eeg_x = _ensure_seq("EEG(raw)", eeg_merged["x_seq"])
 
-        # 2) 提取 fMRI
+        # Extract fMRI
         fmri_info = self._validate_and_extract(fmri_graph, "fmri")
         fmri_x = _ensure_seq("fMRI(raw)", fmri_info["x_seq"])
 
-        # 3) 物理时间对齐
-        self._log("[Align] 开始物理时间对齐（physical alignment）")
+        # Physical time alignment
+        self._log("[Align] Starting physical time alignment")
         fmri_al, eeg_al = self._temporal_align_physical(fmri_x, eeg_x, fmri_graph, on_graph)
         fmri_al = _ensure_seq("fMRI(aligned)", fmri_al)
         eeg_al = _ensure_seq("EEG(aligned)", eeg_al)
 
-        # --- 关键修复：强制截断 max_T ---
+        # Truncate to max_T if specified
         if max_T is not None:
             T_orig = fmri_al.shape[1]
             T = min(fmri_al.shape[1], eeg_al.shape[1])
@@ -348,30 +413,30 @@ class MultiModalMapper:
             if T < T_orig:
                 fmri_al = fmri_al[:, :T, :]
                 eeg_al = eeg_al[:, :T, :]
-                self._log(f"[Align] 强制截断 T={T_orig} → {T} (max_T={max_T})")
+                self._log(f"[Align] Truncated T={T_orig} → {T} (max_T={max_T})")
 
-        # 4) 构建 eeg_info
+        # Build eeg_info
         eeg_info = on_graph.clone()
         eeg_info["eeg"].x_seq = eeg_al
         eeg_info["eeg"].x = eeg_al.mean(dim=1)
 
-        # 5) 更新 fmri_info
+        # Update fmri_info
         fmri_info["x_seq"] = fmri_al
 
-        # 6) 构建
-        self._log("[Dynamic] 开始构建 HeteroData")
+        # Construct HeteroData
+        self._log("[Dynamic] Building HeteroData")
         combined = self._construct_hetero(fmri_info, eeg_info, on_graph)
 
-        # 7) 刺激注入 + 截断
+        # Inject stimulation if provided
         if stim_dict:
-            self._log("[Dynamic] 注入刺激时序 stim_dict")
+            self._log("[Dynamic] Injecting stimulation time series")
             for ntype, stim in stim_dict.items():
                 if ntype in combined and hasattr(combined[ntype], "x_seq"):
                     stim_t = torch.as_tensor(stim, dtype=torch.float32, device=combined[ntype].x_seq.device)
-                    # 截断 stim
+                    # Truncate stim if needed
                     if max_T is not None and stim_t.shape[0] > max_T:
                         stim_t = stim_t[:max_T]
-                        self._log(f"[Stim] 截断 stim[{ntype}] {stim_t.shape[0]} → {max_T}")
+                        self._log(f"[Stim] Truncated stim[{ntype}] to max_T={max_T}")
                     if stim_t.shape[0] == combined[ntype].x_seq.shape[1]:
                         combined[ntype].x_seq = combined[ntype].x_seq + stim_t
                         combined[ntype].x = combined[ntype].x_seq.mean(dim=1)
@@ -379,18 +444,20 @@ class MultiModalMapper:
         return [combined]
 
     def _construct_hetero(self, fmri_info: Any, eeg_info: Any, on_graph: Any) -> HeteroData:
+        """Construct HeteroData from fMRI and EEG information.
+        
+        Enforces fixed relation order and always writes all four relations (even if empty).
+        Edge_index can come from fmri_info/eeg_info/on_graph templates.
+        Edge_attr always computed dynamically from fc/dist and returned as 1D float32 tensors.
+        
+        Args:
+            fmri_info: Dictionary with fMRI data.
+            eeg_info: HeteroData with EEG data.
+            on_graph: Original graph for template lookups.
+            
+        Returns:
+            HeteroData with fmri and eeg nodes and all edge types.
         """
-        Robust HeteroData constructor.
-        - Enforces fixed relation order (REL_ORDER)
-        - Always writes all four relations (even if empty)
-        - edge_index can come from fmri_info/eeg_info/on_graph (templates)
-        - edge_attr always computed dynamically from fc/dist and returned as 1D float32 tensors
-        """
-        from torch_geometric.data import HeteroData
-        import numpy as np
-        import torch
-        import os
-
         data = HeteroData()
 
         def _check_ntf(x: Any, name: str) -> torch.Tensor:
