@@ -46,13 +46,13 @@ class MultiModalMapper:
         """
         self.fmri_mapper = fmri_mapper
         self.eeg_mapper = eeg_mapper
-        self.target_dim = target_dim
-        self.align_dim = align_dim
+        self.target_dim = int(target_dim)
+        self.align_dim = int(align_dim)
         self.align_mode = align_mode
-        self.max_time = max_time
-        self.cross_modal_k = cross_modal_neighbors
-        self.cross_modal_thr = cross_modal_distance_threshold
-        self.verbose = verbose
+        self.max_time = int(max_time)
+        self.cross_modal_k = int(cross_modal_neighbors)
+        self.cross_modal_thr = float(cross_modal_distance_threshold)
+        self.verbose = bool(verbose)
         self._proj_layers: Dict[str, nn.Linear] = {}
         self.align_linear: Optional[nn.Linear] = None
         self.align_R: Optional[nn.Parameter] = None
@@ -308,6 +308,13 @@ class MultiModalMapper:
         Returns:
             Tuple of (edge_index, edge_attr) where edge_index is (2, E) and edge_attr is (E,).
         """
+        # Generate edges if no template or positions missing
+        if fmri_pos is None or eeg_pos is None:
+            return torch.empty((2, 0), dtype=torch.long), torch.empty((0,), dtype=torch.float32)
+
+        # Compute distance matrix once (used for both template loading and generation)
+        dist = torch.cdist(fmri_pos, eeg_pos)
+        
         # Load from template if available
         if template_path is not None and os.path.exists(template_path):
             saved = torch.load(template_path)
@@ -315,19 +322,14 @@ class MultiModalMapper:
             self._log(f"[CM] Loaded cross-modal edge template from {template_path}")
 
             # Compute edge attributes based on distance
-            if fmri_pos is None or eeg_pos is None or edge_index.numel() == 0:
+            if edge_index.numel() == 0:
                 edge_attr = torch.empty((0,), dtype=torch.float32)
             else:
-                dist = torch.cdist(fmri_pos, eeg_pos)
                 src, dst = edge_index
                 edge_attr = 1.0 / (dist[src, dst] + 1e-6)
             return edge_index, edge_attr
 
-        # Generate edges if no template or positions missing
-        if fmri_pos is None or eeg_pos is None:
-            return torch.empty((2, 0), dtype=torch.long), torch.empty((0,), dtype=torch.float32)
-
-        dist = torch.cdist(fmri_pos, eeg_pos)
+        # Generate edges based on k-NN or distance threshold
         edge_index_list = []
         edge_attr_list = []
 

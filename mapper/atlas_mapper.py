@@ -17,7 +17,10 @@ class BrainAtlas:
         """Initialize BrainAtlas.
         
         Args:
-            file_path: Path to atlas JSON file. If None, raises ValueError.
+            file_path: Path to atlas JSON file. Required parameter.
+            
+        Raises:
+            ValueError: If file_path is not provided.
         """
         self.regions = {}
         self.connection_hints = {}
@@ -25,7 +28,7 @@ class BrainAtlas:
         if file_path:
             self.load_from_path(file_path)
         else:
-            raise ValueError("file_path is required. GUI file selection has been removed.")
+            raise ValueError("Atlas file path must be provided")
 
     def load_from_path(self, file_path: str):
         """Load brain atlas from given file path.
