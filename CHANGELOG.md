@@ -1,5 +1,39 @@
 # TwinBrain 更新历史
 
+## 2026-02-01 (晚间更新)
+
+### 重要修复和新增优化 🔧
+
+#### 修复：PredictorHead 训练集成 ✅
+- **问题**: PredictorHead 模块被创建但从未在训练中使用
+- **解决**: 
+  - 在训练循环中集成 PredictorHead
+  - 使用 context_length 从序列中提取上下文和目标
+  - 将预测损失加入总损失（权重：prediction_weight）
+  - 将 predictor 参数添加到梯度裁剪
+- **影响**: PredictorHead 现在会在每个训练批次中被训练
+
+#### 新增：梯度累积 (Gradient Accumulation) 🆕
+- **功能**: 在多个批次上累积梯度，等效于更大的批次大小
+- **配置**:
+  ```yaml
+  training:
+    gradient_accumulation_steps: 4  # 累积4个批次再更新
+  ```
+- **优势**:
+  - 在有限GPU内存下模拟大批次训练
+  - 更稳定的梯度更新
+  - 提高训练效率
+- **实现**:
+  - 仅在累积周期开始时清零梯度
+  - 损失按累积步数缩放
+  - 仅在累积完成后执行优化器步骤
+
+**修改文件**:
+- `train/hetero_trainer.py`: 集成预测训练 + 梯度累积
+- `workflows/training.py`: 传递梯度累积参数
+- `config/default.yaml`: 新增 gradient_accumulation_steps 配置
+
 ## 2026-02-01 (下午更新)
 
 ### 预测功能优化 🔧

@@ -170,6 +170,8 @@ class TrainingWorkflow:
             # New: metrics tracking
             enable_metrics_tracking=cfg.get('metrics.enabled', True),
             metrics_output_dir=str(result_dir / cfg.get('metrics.output_dir', 'metrics')),
+            # New: gradient accumulation
+            gradient_accumulation_steps=cfg.get('training.gradient_accumulation_steps', 1),
             device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
         )
         

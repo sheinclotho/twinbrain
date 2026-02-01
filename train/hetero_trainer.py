@@ -93,6 +93,7 @@ class DynamicHeteroTrainer:
         prediction_weight: float = 0.1,
         enable_metrics_tracking: bool = True,
         metrics_output_dir: Optional[str] = None,
+        gradient_accumulation_steps: int = 1,  # NEW: Gradient accumulation
     ):
         # ---------- logger ----------
         self.logger = logging.getLogger("DynamicHeteroTrainer")
@@ -158,6 +159,9 @@ class DynamicHeteroTrainer:
         self.prediction_context_length = int(prediction_context_length) if prediction_context_length is not None else None
         self.prediction_steps = int(prediction_steps)
         self.prediction_weight = float(prediction_weight)
+        
+        # New: gradient accumulation
+        self.gradient_accumulation_steps = max(1, int(gradient_accumulation_steps))
 
         # New: metrics tracking
         self.enable_metrics_tracking = bool(enable_metrics_tracking)
@@ -588,7 +592,10 @@ class DynamicHeteroTrainer:
 
             for data_idx, data in enumerate(self.data_list):
                 data = data.to(self.device)
-                self.optimizer.zero_grad(set_to_none=True)
+                
+                # Zero gradients only at start of accumulation cycle
+                if data_idx % self.gradient_accumulation_steps == 0:
+                    self.optimizer.zero_grad(set_to_none=True)
 
                 # 1) GraphEncoder
                 enc_out = self.graph_encoder(data)
@@ -659,6 +666,44 @@ class DynamicHeteroTrainer:
                 temp_loss = torch.tensor(0.0, device=self.device)
                 raw_pred_loss_total = torch.tensor(0.0, device=self.device)
                 raw_pred_weight = float(getattr(self, "raw_pred_weight", self.temp_weight))
+                
+                # NEW: Use PredictorHead for prediction if enabled
+                predictor_loss = torch.tensor(0.0, device=self.device)
+                if self.enable_prediction and self.predictor is not None:
+                    # Use PredictorHead for multi-step prediction
+                    for nt in self.metadata[0]:
+                        seq = None
+                        if isinstance(proj_seq_dict, dict):
+                            seq = proj_seq_dict.get(nt, None)
+                        elif isinstance(proj_seq_dict, torch.Tensor):
+                            seq = proj_seq_dict
+                        if seq is None or (isinstance(seq, torch.Tensor) and seq.numel() == 0):
+                            continue
+                        if not isinstance(seq, torch.Tensor) or seq.ndim != 3:
+                            continue
+                        
+                        N, T, H = seq.shape
+                        if T < self.prediction_steps + 5:  # Need enough context
+                            continue
+                        
+                        # Split into context and target
+                        if self.prediction_context_length and T > self.prediction_context_length + self.prediction_steps:
+                            # Use specified context length
+                            context_end = T - self.prediction_steps
+                            context_start = max(0, context_end - self.prediction_context_length)
+                            context_seq = seq[:, context_start:context_end, :]
+                            target_seq = seq[:, context_end:context_end + self.prediction_steps, :]
+                        else:
+                            # Use all available context
+                            context_seq = seq[:, :-self.prediction_steps, :]
+                            target_seq = seq[:, -self.prediction_steps:, :]
+                        
+                        # Predict using PredictorHead
+                        predictions, _ = self.predictor(context_seq, return_attention=False)
+                        
+                        # Compute prediction loss
+                        pred_loss = F_nn.mse_loss(predictions, target_seq)
+                        predictor_loss = predictor_loss + pred_loss
 
                 for nt in self.metadata[0]:
                     seq = None
@@ -871,26 +916,39 @@ class DynamicHeteroTrainer:
                     loss = loss + self.spec_loss_weight * spec_loss_total
                 if raw_pred_loss_total.numel() != 0 and float(raw_pred_loss_total.detach().cpu()) != 0.0:
                     loss = loss + raw_pred_weight * raw_pred_loss_total
+                # NEW: Add PredictorHead loss if enabled
+                if self.enable_prediction and predictor_loss.numel() != 0:
+                    loss = loss + self.prediction_weight * predictor_loss
+                
+                # Scale loss for gradient accumulation
+                if self.gradient_accumulation_steps > 1:
+                    loss = loss / self.gradient_accumulation_steps
 
-                # 12) backward + step
+                # 12) backward + step (with gradient accumulation)
                 if self.use_amp:
                     self.scaler.scale(loss).backward()
-                    if self.grad_clip > 0:
-                        self.scaler.unscale_(self.optimizer)
-                        torch.nn.utils.clip_grad_norm_(
-                            list(self.model.parameters()) + list(self.aligner.parameters()),
-                            self.grad_clip,
-                        )
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
+                    
+                    # Only step optimizer every N accumulation steps
+                    if (data_idx + 1) % self.gradient_accumulation_steps == 0 or (data_idx + 1) == len(self.data_list):
+                        if self.grad_clip > 0:
+                            self.scaler.unscale_(self.optimizer)
+                            params_to_clip = list(self.model.parameters()) + list(self.aligner.parameters())
+                            if self.predictor is not None:
+                                params_to_clip += list(self.predictor.parameters())
+                            torch.nn.utils.clip_grad_norm_(params_to_clip, self.grad_clip)
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
                 else:
                     loss.backward()
-                    if self.grad_clip > 0:
-                        torch.nn.utils.clip_grad_norm_(
-                            list(self.model.parameters()) + list(self.aligner.parameters()),
-                            self.grad_clip,
-                        )
-                    self.optimizer.step()
+                    
+                    # Only step optimizer every N accumulation steps
+                    if (data_idx + 1) % self.gradient_accumulation_steps == 0 or (data_idx + 1) == len(self.data_list):
+                        if self.grad_clip > 0:
+                            params_to_clip = list(self.model.parameters()) + list(self.aligner.parameters())
+                            if self.predictor is not None:
+                                params_to_clip += list(self.predictor.parameters())
+                            torch.nn.utils.clip_grad_norm_(params_to_clip, self.grad_clip)
+                        self.optimizer.step()
 
                 # 13) accumulate stats
                 total_loss += float(loss.detach().cpu())

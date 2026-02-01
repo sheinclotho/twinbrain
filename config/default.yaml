@@ -12,6 +12,7 @@ training:
   batch_size: 1
   learning_rate: 0.0001
   weight_decay: 0.0001
+  gradient_accumulation_steps: 1  # NEW: Accumulate gradients over N steps (1=no accumulation)
   
   # Learning rate multipliers
   feature_lr_mul: 12.0
