@@ -15,19 +15,24 @@ from utils.metrics_tracker import MetricsTracker, TrainingMonitor
 def demo_predictor():
     """Demonstrate the PredictorHead module."""
     print("=" * 80)
-    print("Demo 1: Multi-step Future Prediction")
+    print("Demo 1: Multi-step Future Prediction with Context Length")
     print("=" * 80)
     
     # Configuration
     batch_size = 2
-    seq_length = 50
+    seq_length = 100  # Total available history
+    context_length = 50  # Use only last 50 steps
     hidden_dim = 128
     n_future_steps = 10
     
-    # Create predictor
+    print(f"\nScenario: Use last {context_length} steps to predict next {n_future_steps} steps")
+    print(f"Available history: {seq_length} steps")
+    
+    # Create predictor with context length
     predictor = PredictorHead(
         hidden_dim=hidden_dim,
         n_future_steps=n_future_steps,
+        context_length=context_length,  # NEW: Specify context length
         num_layers=3,
         num_heads=8,
         dropout=0.1
@@ -36,13 +41,16 @@ def demo_predictor():
     # Create sample historical sequence
     latent_seq = torch.randn(batch_size, seq_length, hidden_dim)
     
-    print(f"Input shape: {latent_seq.shape}")
+    print(f"\nInput shape: {latent_seq.shape}")
+    print(f"Context length: {context_length}")
+    print(f"Prediction horizon: {n_future_steps}")
     
     # Predict future
     predictions, attention = predictor(latent_seq, return_attention=True)
     
-    print(f"Predictions shape: {predictions.shape}")
+    print(f"\nPredictions shape: {predictions.shape}")
     print(f"Attention weights shape: {attention.shape if attention is not None else 'None'}")
+    print(f"→ Attention is over {context_length} context steps")
     
     # Compute loss against ground truth
     target_future = torch.randn(batch_size, n_future_steps, hidden_dim)

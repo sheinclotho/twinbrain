@@ -164,6 +164,7 @@ class TrainingWorkflow:
             warmup_epochs=cfg.get('training.warmup_epochs', 5),
             # New: prediction parameters
             enable_prediction=cfg.get('prediction.enabled', False),
+            prediction_context_length=cfg.get('prediction.context_length', None),
             prediction_steps=cfg.get('prediction.steps', 10),
             prediction_weight=cfg.get('prediction.weight', 0.1),
             # New: metrics tracking

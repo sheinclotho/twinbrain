@@ -23,6 +23,7 @@ class PredictorHead(nn.Module):
         self,
         hidden_dim: int,
         n_future_steps: int = 10,
+        context_length: Optional[int] = None,
         num_layers: int = 3,
         num_heads: int = 8,
         dropout: float = 0.1,
@@ -34,6 +35,8 @@ class PredictorHead(nn.Module):
         Args:
             hidden_dim: Dimension of hidden/latent states
             n_future_steps: Number of future steps to predict
+            context_length: Number of historical steps to use as context.
+                          If None, uses all available steps. Default: None
             num_layers: Number of GRU layers
             num_heads: Number of attention heads
             dropout: Dropout probability
@@ -42,6 +45,7 @@ class PredictorHead(nn.Module):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.n_future_steps = n_future_steps
+        self.context_length = context_length
         self.use_residual = use_residual
         
         # Temporal prediction network
@@ -88,18 +92,29 @@ class PredictorHead(nn.Module):
         Returns:
             predictions: [B, T_future, H] - Predicted future sequence
             attention_weights: [B, T_future, T_past] if return_attention=True
+            
+        Note:
+            If context_length is set, only the last context_length steps are used.
+            For example, if context_length=50 and latent_seq has 100 steps,
+            only the last 50 steps will be used for prediction.
         """
         batch_size = latent_seq.shape[0]
         
-        # Initialize with historical sequence
-        _, hidden = self.predictor_gru(latent_seq)
+        # Use only the last context_length steps if specified
+        if self.context_length is not None and latent_seq.shape[1] > self.context_length:
+            context_seq = latent_seq[:, -self.context_length:, :]
+        else:
+            context_seq = latent_seq
+        
+        # Initialize with context sequence
+        _, hidden = self.predictor_gru(context_seq)
         
         # Auto-regressive prediction
         predictions = []
         attention_weights_list = [] if return_attention else None
         
-        # Start with last historical state
-        current = latent_seq[:, -1:, :]  # [B, 1, H]
+        # Start with last state from context
+        current = context_seq[:, -1:, :]  # [B, 1, H]
         
         for t in range(self.n_future_steps):
             # Predict next step with GRU
@@ -108,8 +123,8 @@ class PredictorHead(nn.Module):
             # Apply attention to historical context
             attended, attn_weights = self.temporal_attention(
                 pred,  # query: [B, 1, H]
-                latent_seq,  # key: [B, T_past, H]
-                latent_seq,  # value: [B, T_past, H]
+                context_seq,  # key: [B, T_context, H]
+                context_seq,  # value: [B, T_context, H]
             )
             
             # Combine with residual connection
@@ -152,18 +167,27 @@ class PredictorHead(nn.Module):
             
         Returns:
             prediction: [B, 1, H] - Next step prediction
+            
+        Note:
+            If context_length is set, only the last context_length steps are used.
         """
-        # Use GRU to get next hidden state
-        _, hidden = self.predictor_gru(latent_seq)
+        # Use only the last context_length steps if specified
+        if self.context_length is not None and latent_seq.shape[1] > self.context_length:
+            context_seq = latent_seq[:, -self.context_length:, :]
+        else:
+            context_seq = latent_seq
         
-        # Get last state
-        current = latent_seq[:, -1:, :]
+        # Use GRU to get next hidden state
+        _, hidden = self.predictor_gru(context_seq)
+        
+        # Get last state from context
+        current = context_seq[:, -1:, :]
         
         # Predict one step
         pred, _ = self.predictor_gru(current, hidden)
         
-        # Apply attention
-        attended, _ = self.temporal_attention(pred, latent_seq, latent_seq)
+        # Apply attention to context
+        attended, _ = self.temporal_attention(pred, context_seq, context_seq)
         
         # Combine and project
         if self.use_residual:

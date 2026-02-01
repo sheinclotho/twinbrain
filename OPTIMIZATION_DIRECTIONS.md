@@ -17,15 +17,16 @@
 
 ### 1. 增强预测能力 ✅ 已实现 (部分)
 
-#### 1.1 多步未来预测 ✅ 已实现
+#### 1.1 多步未来预测 ✅ 已实现（已优化）
 
-**实施状态**: ✅ **已完成** (2026-02-01)
+**实施状态**: ✅ **已完成并优化** (2026-02-01, 更新于 2026-02-01)
 
 **当前状态**:
 - ✅ 已实现 PredictorHead 模块，支持多步未来预测
 - ✅ 集成到 DynamicHeteroTrainer 中
 - ✅ 支持通过配置文件启用/禁用
 - ✅ 支持自定义预测步数和损失权重
+- ✅ **新增**: 支持配置上下文长度（context_length）
 
 **实现位置**:
 - `train/predictor.py`: PredictorHead 和 ConditionalPredictor 类
@@ -36,12 +37,19 @@
 ```yaml
 # 在配置文件中启用预测
 prediction:
-  enabled: true  # 启用多步预测
-  steps: 10      # 预测未来10步
-  weight: 0.1    # 预测损失权重
+  enabled: true         # 启用多步预测
+  context_length: 50    # 使用最后50步作为上下文
+  steps: 10             # 预测未来10步
+  weight: 0.1           # 预测损失权重
+# 含义：使用最后50步预测接下来的10步
 ```
 
-**优化方向**: 📋 待优化
+**优化点** (2026-02-01):
+- ✅ 增加 `context_length` 参数，明确指定"用多少步预测多少步"
+- ✅ 避免使用过长历史导致计算开销过大
+- ✅ 提供更灵活的预测配置
+
+**优化方向**: 📋 待进一步优化
 
 ##### A. 引入预测模块 ✅ 已实现
 
@@ -50,9 +58,15 @@ prediction:
 ```python
 class PredictorHead(nn.Module):
     """预测未来状态的模块"""
-    def __init__(self, hidden_dim, n_future_steps=10):
+    def __init__(
+        self, 
+        hidden_dim, 
+        n_future_steps=10,
+        context_length=None  # NEW: 上下文长度
+    ):
         super().__init__()
         self.n_future_steps = n_future_steps
+        self.context_length = context_length  # 控制使用多少历史步数
         
         # 时序预测网络
         self.predictor_gru = nn.GRU(
@@ -72,9 +86,17 @@ class PredictorHead(nn.Module):
         """
         latent_seq: [B, T_past, H] - 历史潜在序列
         return: [B, T_future, H] - 未来预测序列
+        
+        如果设置了 context_length，仅使用最后 context_length 步
         """
+        # 使用指定长度的上下文
+        if self.context_length and latent_seq.shape[1] > self.context_length:
+            context_seq = latent_seq[:, -self.context_length:, :]
+        else:
+            context_seq = latent_seq
+        
         # 使用历史信息初始化
-        _, hidden = self.predictor_gru(latent_seq)
+        _, hidden = self.predictor_gru(context_seq)
         
         # 自回归预测未来
         predictions = []

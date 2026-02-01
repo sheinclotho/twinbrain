@@ -106,6 +106,7 @@ python main.py train --config config/default.yaml
 - GRU 时序建模
 - 多头注意力机制
 - 自回归预测
+- **可配置上下文长度**（指定使用多少历史步数）
 - 可配置预测步数
 
 **架构**：
@@ -116,6 +117,7 @@ class PredictorHead(nn.Module):
         self,
         hidden_dim: int,
         n_future_steps: int = 10,
+        context_length: Optional[int] = None,  # NEW: 上下文长度
         num_layers: int = 3,
         num_heads: int = 8,
         dropout: float = 0.1
@@ -126,10 +128,19 @@ class PredictorHead(nn.Module):
 ```yaml
 # config/default.yaml
 prediction:
-  enabled: true   # 启用预测
-  steps: 10       # 预测未来10步
-  weight: 0.1     # 预测损失权重
+  enabled: true         # 启用预测
+  context_length: 50    # 使用最后50步作为上下文
+  steps: 10             # 预测未来10步
+  weight: 0.1           # 预测损失权重
+  # 含义：使用最后50步预测接下来的10步
 ```
+
+**重要说明**：
+- `context_length`: 指定使用多少历史时间步作为输入上下文
+  - 如果为 `null` 或不设置，使用所有可用的历史步数
+  - 如果设置（如 50），仅使用最后 50 步进行预测
+- `steps`: 预测未来多少步
+- 示例：`context_length: 50, steps: 10` 表示"用最后50步预测接下来10步"
 
 #### ConditionalPredictor
 
@@ -151,7 +162,8 @@ prediction:
 # config/default.yaml
 prediction:
   enabled: true
-  steps: 10
+  context_length: 50  # 使用最后50步
+  steps: 10           # 预测未来10步
   weight: 0.1
 ```
 
@@ -164,16 +176,19 @@ python main.py train --config config/default.yaml
 ```python
 from train.predictor import PredictorHead
 
-# 创建预测器
+# 创建预测器（使用最后50步预测未来10步）
 predictor = PredictorHead(
     hidden_dim=128,
-    n_future_steps=10
+    n_future_steps=10,
+    context_length=50  # 指定上下文长度
 )
 
 # 历史潜在序列 [batch, seq_len, hidden_dim]
-latent_seq = model.encode(brain_data)
+# 假设有100步历史，但只使用最后50步
+latent_seq = model.encode(brain_data)  # shape: [batch, 100, 128]
 
 # 预测未来
+# 自动使用最后50步作为上下文
 predictions, attention = predictor(
     latent_seq,
     return_attention=True
@@ -237,7 +252,8 @@ python example_new_features.py
 # config/default.yaml
 prediction:
   enabled: true
-  steps: 10
+  context_length: 50  # 使用最后50步作为上下文
+  steps: 10           # 预测未来10步
   weight: 0.1
 
 metrics:
@@ -263,14 +279,29 @@ python main.py train --config config/default.yaml
 
 ```yaml
 prediction:
-  enabled: false      # 是否启用预测功能
-  steps: 10           # 预测未来的步数（1-50）
-  weight: 0.1         # 预测损失在总损失中的权重（0.0-1.0）
+  enabled: false        # 是否启用预测功能
+  context_length: 50    # 使用多少历史步数作为上下文（null=全部）
+  steps: 10             # 预测未来的步数（1-50）
+  weight: 0.1           # 预测损失在总损失中的权重（0.0-1.0）
 ```
 
-**建议值**：
-- `steps`: 5-15 步（取决于数据时间分辨率）
-- `weight`: 0.05-0.2（避免过度影响重建质量）
+**参数说明**：
+- `context_length`: 上下文长度
+  - 设置为数字（如 50）：仅使用最后 N 步作为输入
+  - 设置为 `null` 或不设置：使用所有可用的历史步数
+  - 建议值：30-100（取决于数据采样率和记忆需求）
+- `steps`: 预测步数（预测未来多少步）
+  - 建议值：5-15 步（取决于数据时间分辨率）
+- `weight`: 预测损失权重
+  - 建议值：0.05-0.2（避免过度影响重建质量）
+
+**示例配置理解**：
+```yaml
+prediction:
+  context_length: 50
+  steps: 10
+```
+含义：**使用最后50个时间步预测接下来的10个时间步**
 
 ### metrics 配置
 

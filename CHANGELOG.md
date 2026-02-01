@@ -1,6 +1,34 @@
 # TwinBrain 更新历史
 
-## 2026-02-01
+## 2026-02-01 (下午更新)
+
+### 预测功能优化 🔧
+
+#### 多步未来预测 - 上下文长度控制
+- **新增参数**: `context_length` 
+  - 明确指定"使用多少步预测多少步"
+  - 解决了之前不清楚使用多长历史的问题
+  - 示例：`context_length: 50, steps: 10` = 用50步预测10步
+- **更新模块**:
+  - `train/predictor.py`: PredictorHead 增加 context_length 参数
+  - `train/hetero_trainer.py`: 传递 context_length 参数
+  - `workflows/training.py`: 从配置读取 context_length
+  - `config/default.yaml`: 新增 prediction.context_length 配置
+- **文档更新**:
+  - `docs/NEW_FEATURES.md`: 详细说明 context_length 用法
+  - `OPTIMIZATION_DIRECTIONS.md`: 标记优化完成
+  - `example_new_features.py`: 演示 context_length 功能
+
+**配置示例**:
+```yaml
+prediction:
+  enabled: true
+  context_length: 50  # 使用最后50步作为输入
+  steps: 10           # 预测接下来10步
+  weight: 0.1
+```
+
+## 2026-02-01 (上午)
 
 ### 新功能实现 🎉
 

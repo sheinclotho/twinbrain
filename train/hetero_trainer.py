@@ -88,6 +88,7 @@ class DynamicHeteroTrainer:
         auto_align_max_lag: int = 120,
         # New parameters for enhanced features
         enable_prediction: bool = False,
+        prediction_context_length: Optional[int] = None,
         prediction_steps: int = 10,
         prediction_weight: float = 0.1,
         enable_metrics_tracking: bool = True,
@@ -154,6 +155,7 @@ class DynamicHeteroTrainer:
 
         # New: prediction config
         self.enable_prediction = bool(enable_prediction)
+        self.prediction_context_length = int(prediction_context_length) if prediction_context_length is not None else None
         self.prediction_steps = int(prediction_steps)
         self.prediction_weight = float(prediction_weight)
 
@@ -259,12 +261,14 @@ class DynamicHeteroTrainer:
                 self.predictor = PredictorHead(
                     hidden_dim=self.hidden_dim,
                     n_future_steps=self.prediction_steps,
+                    context_length=self.prediction_context_length,
                     num_layers=3,
                     num_heads=8,
                     dropout=self.dropout,
                     use_residual=True
                 ).to(self.device)
-                self.logger.info(f"Predictor enabled: {self.prediction_steps} steps ahead")
+                context_info = f"context={self.prediction_context_length}" if self.prediction_context_length else "full sequence"
+                self.logger.info(f"Predictor enabled: use {context_info} to predict {self.prediction_steps} steps ahead")
             except ImportError:
                 self.logger.warning("Failed to import PredictorHead, prediction disabled")
                 self.enable_prediction = False

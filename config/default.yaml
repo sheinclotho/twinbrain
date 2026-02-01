@@ -51,8 +51,10 @@ loss:
 # Prediction settings (NEW)
 prediction:
   enabled: false  # Enable multi-step future prediction
+  context_length: 50  # Number of historical steps to use as context
   steps: 10  # Number of future steps to predict
   weight: 0.1  # Weight for prediction loss
+  # Example: Use last 50 steps to predict next 10 steps
   
 # Auto-alignment settings
 alignment:
