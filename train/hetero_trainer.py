@@ -670,7 +670,7 @@ class DynamicHeteroTrainer:
                 # NEW: Use PredictorHead for prediction if enabled
                 predictor_loss = torch.tensor(0.0, device=self.device)
                 if self.enable_prediction and self.predictor is not None:
-                    # Use PredictorHead for multi-step prediction
+                    # Use PredictorHead for multi-step prediction with sliding window
                     for nt in self.metadata[0]:
                         seq = None
                         if isinstance(proj_seq_dict, dict):
@@ -683,27 +683,43 @@ class DynamicHeteroTrainer:
                             continue
                         
                         N, T, H = seq.shape
-                        if T < self.prediction_steps + 5:  # Need enough context
+                        min_required = (self.prediction_context_length or 10) + self.prediction_steps
+                        if T < min_required:
                             continue
                         
-                        # Split into context and target
-                        if self.prediction_context_length and T > self.prediction_context_length + self.prediction_steps:
-                            # Use specified context length
-                            context_end = T - self.prediction_steps
-                            context_start = max(0, context_end - self.prediction_context_length)
+                        # Use sliding window to create multiple training samples
+                        # This enables autoregressive learning across the sequence
+                        context_len = self.prediction_context_length or 50
+                        stride = max(1, self.prediction_steps // 2)  # Overlap windows for more samples
+                        
+                        num_windows = 0
+                        window_loss = torch.tensor(0.0, device=self.device)
+                        
+                        # Slide window across the sequence
+                        for start_idx in range(0, T - context_len - self.prediction_steps + 1, stride):
+                            context_start = start_idx
+                            context_end = start_idx + context_len
+                            target_start = context_end
+                            target_end = context_end + self.prediction_steps
+                            
+                            if target_end > T:
+                                break
+                            
+                            # Extract context and target
                             context_seq = seq[:, context_start:context_end, :]
-                            target_seq = seq[:, context_end:context_end + self.prediction_steps, :]
-                        else:
-                            # Use all available context
-                            context_seq = seq[:, :-self.prediction_steps, :]
-                            target_seq = seq[:, -self.prediction_steps:, :]
+                            target_seq = seq[:, target_start:target_end, :]
+                            
+                            # Predict using PredictorHead
+                            predictions, _ = self.predictor(context_seq, return_attention=False)
+                            
+                            # Compute prediction loss for this window
+                            pred_loss = F_nn.mse_loss(predictions, target_seq)
+                            window_loss = window_loss + pred_loss
+                            num_windows += 1
                         
-                        # Predict using PredictorHead
-                        predictions, _ = self.predictor(context_seq, return_attention=False)
-                        
-                        # Compute prediction loss
-                        pred_loss = F_nn.mse_loss(predictions, target_seq)
-                        predictor_loss = predictor_loss + pred_loss
+                        # Average over all windows
+                        if num_windows > 0:
+                            predictor_loss = predictor_loss + (window_loss / num_windows)
 
                 for nt in self.metadata[0]:
                     seq = None

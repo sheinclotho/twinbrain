@@ -1,5 +1,34 @@
 # TwinBrain 更新历史
 
+## 2026-02-01 (深夜更新)
+
+### 重要改进：滑动窗口自回归训练 🔧
+
+#### 优化：PredictorHead 滑动窗口训练 ✅
+- **之前的问题**: 每个序列只用最后一段训练一次，数据利用率低
+- **改进方案**: 
+  - **滑动窗口机制**: 在序列上滑动窗口，生成多个训练样本
+  - **自回归学习**: 每个位置都学习预测未来
+  - **示例**: 序列长度200，context=50，steps=10，stride=5
+    - 窗口1: [0:50] → 预测 [50:60]
+    - 窗口2: [5:55] → 预测 [55:65]
+    - 窗口3: [10:60] → 预测 [60:70]
+    - ... 生成约30个训练样本！
+- **效果**: 
+  - 数据利用率提升 ~30倍
+  - 充分的自回归训练
+  - 模型学习更充分
+
+**实现细节**:
+```python
+stride = max(1, self.prediction_steps // 2)  # 重叠窗口
+for start_idx in range(0, T - context_len - steps + 1, stride):
+    context = seq[:, start_idx:start_idx+context_len, :]
+    target = seq[:, start_idx+context_len:start_idx+context_len+steps, :]
+    predictions = self.predictor(context)
+    loss += mse_loss(predictions, target)
+```
+
 ## 2026-02-01 (晚间更新)
 
 ### 重要修复和新增优化 🔧
@@ -30,7 +59,7 @@
   - 仅在累积完成后执行优化器步骤
 
 **修改文件**:
-- `train/hetero_trainer.py`: 集成预测训练 + 梯度累积
+- `train/hetero_trainer.py`: 集成预测训练 + 梯度累积 + 滑动窗口
 - `workflows/training.py`: 传递梯度累积参数
 - `config/default.yaml`: 新增 gradient_accumulation_steps 配置
 
