@@ -449,7 +449,7 @@ response = simulate_stimulation(
     "subject": "sub-01",
     "atlas": "Schaefer200",
     "time_point": 100,
-    "model_version": "v4"
+    "model_version": "current"
   }
 }
 ```
@@ -556,7 +556,7 @@ public class BrainVisualization : MonoBehaviour
 配置文件使用YAML格式，包含以下部分：
 
 ```yaml
-version: "v4"
+version: "current"
 description: "配置说明"
 
 # 路径配置
@@ -872,7 +872,7 @@ model:
 
 ### Q3: 时间对齐效果不好？
 
-使用v4配置，它有更强的时间对齐：
+使用默认配置，它有更强的时间对齐：
 ```bash
 python main.py train --config config/default.yaml
 ```
