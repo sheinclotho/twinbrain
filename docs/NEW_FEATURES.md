@@ -1,8 +1,8 @@
 # TwinBrain 新功能说明
 
-## 🎯 已实现的优化功能
+## 🎯 已实现的功能
 
-本文档介绍 TwinBrain 系统最新实现的优化功能（2026-02-01）。
+本文档介绍 TwinBrain 系统已实现的核心功能。
 
 ---
 
@@ -96,6 +96,8 @@ python main.py train --config config/default.yaml
 
 基于 GRU 和注意力机制的未来状态预测模块，可以预测大脑未来多个时间步的状态。
 
+**注意**：当前实现仅支持单模态内预测，不支持模态间双向预测（如fMRI→EEG或EEG→fMRI）。
+
 ### 核心组件
 
 #### PredictorHead
@@ -112,12 +114,12 @@ python main.py train --config config/default.yaml
 **架构**：
 ```python
 class PredictorHead(nn.Module):
-    """多步未来状态预测器"""
+    """多步未来状态预测器（单模态内预测）"""
     def __init__(
         self,
         hidden_dim: int,
         n_future_steps: int = 10,
-        context_length: Optional[int] = None,  # NEW: 上下文长度
+        context_length: Optional[int] = None,  # 使用的历史步数
         num_layers: int = 3,
         num_heads: int = 8,
         dropout: float = 0.1
@@ -141,6 +143,7 @@ prediction:
   - 如果设置（如 50），仅使用最后 50 步进行预测
 - `steps`: 预测未来多少步
 - 示例：`context_length: 50, steps: 10` 表示"用最后50步预测接下来10步"
+- **限制**：仅支持单模态内预测，不支持跨模态预测
 
 #### ConditionalPredictor
 
@@ -153,6 +156,8 @@ prediction:
 - 整合外部刺激/条件
 - 预测大脑对刺激的响应
 - 支持时变刺激模式
+
+**注意**：此功能当前主要用于推理阶段，训练中尚未完全集成跨模态预测学习。
 
 ### 使用方法
 
@@ -223,10 +228,15 @@ predicted_response = predictor(current_state, stimulation)
 ### 预测效果
 
 预测模块可以：
-- 预测未来 1-20 步的大脑状态
+- 预测未来 1-20 步的大脑状态（单模态内）
 - 学习时序动力学规律
 - 为虚拟刺激实验提供基础
 - 支持闭环神经调控
+
+**当前限制**：
+- 仅支持fMRI→fMRI或EEG→EEG的单模态预测
+- 不支持fMRI→EEG或EEG→fMRI的跨模态预测
+- 跨模态双向预测功能需要进一步开发
 
 ---
 
@@ -383,6 +393,6 @@ prediction:
 
 ---
 
-**版本**: 1.0  
-**日期**: 2026-02-01  
+**版本**: 2.0  
+**日期**: 2026-02-02  
 **作者**: TwinBrain Development Team
