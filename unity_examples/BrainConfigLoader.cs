@@ -31,9 +31,16 @@ public class BrainConfigLoader : MonoBehaviour
     {
         visualization = GetComponent<BrainVisualization>();
         
-        if (autoLoad && File.Exists(configPath))
+        if (autoLoad)
         {
-            LoadConfiguration();
+            if (File.Exists(configPath))
+            {
+                LoadConfiguration();
+            }
+            else
+            {
+                Debug.LogWarning($"Configuration file not found: {configPath}. Using default settings.");
+            }
         }
     }
     

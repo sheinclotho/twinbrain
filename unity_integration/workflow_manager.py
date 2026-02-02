@@ -63,6 +63,12 @@ class WorkflowManager:
     提供完整的自动化流程，从数据准备到Unity可视化。
     """
     
+    # 活动强度归一化常量
+    # 假设数据在标准化后大致在 [-3, 3] 范围内
+    # 映射到 [0, 1] 用于可视化
+    ACTIVITY_NORMALIZATION_MIN = -3.0
+    ACTIVITY_NORMALIZATION_MAX = 3.0
+    
     def __init__(
         self,
         config: Optional[WorkflowConfig] = None,
@@ -234,9 +240,9 @@ class WorkflowManager:
             "project_name": f"TwinBrain_{self.config.subject_id}",
             "atlas": self.config.atlas_name,
             "data_paths": {
-                "json_dir": "json/",
-                "obj_dir": "obj/",
-                "materials_dir": "materials/"
+                "json_dir": str(Path("json")),  # 相对于输出目录的路径
+                "obj_dir": str(Path("obj")),
+                "materials_dir": str(Path("materials"))
             },
             "visualization": {
                 "region_scale": 1.0,
@@ -361,8 +367,9 @@ class WorkflowManager:
                 else:
                     activity = activity_data[region_id].mean().item()
                 
-                # 归一化活动强度
-                activity_norm = (activity + 3.0) / 6.0
+                # 归一化活动强度到 [0, 1]
+                activity_norm = (activity - self.ACTIVITY_NORMALIZATION_MIN) / \
+                               (self.ACTIVITY_NORMALIZATION_MAX - self.ACTIVITY_NORMALIZATION_MIN)
                 activity_norm = max(0.0, min(1.0, activity_norm))
                 
                 # 球体半径基于活动强度

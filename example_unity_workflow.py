@@ -15,12 +15,15 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from unity_integration import run_unity_workflow, WorkflowConfig
 
+# 常量
+SEPARATOR = SEPARATOR
+
 
 def example_basic_workflow():
     """示例1: 基础工作流"""
-    print("=" * 60)
+    print(SEPARATOR)
     print("示例1: 基础工作流")
-    print("=" * 60)
+    print(SEPARATOR)
     
     # 最简单的配置
     config = WorkflowConfig(
@@ -40,9 +43,9 @@ def example_basic_workflow():
 
 def example_full_workflow():
     """示例2: 完整工作流（包含所有功能）"""
-    print("\n" + "=" * 60)
+    print("\n" + SEPARATOR)
     print("示例2: 完整工作流")
-    print("=" * 60)
+    print(SEPARATOR)
     
     # 完整配置
     config = WorkflowConfig(
@@ -91,9 +94,9 @@ def example_full_workflow():
 
 def example_animation_workflow():
     """示例3: 动画序列导出"""
-    print("\n" + "=" * 60)
+    print("\n" + SEPARATOR)
     print("示例3: 动画序列导出")
-    print("=" * 60)
+    print(SEPARATOR)
     
     config = WorkflowConfig(
         output_dir='output/animation',
@@ -122,9 +125,9 @@ def example_animation_workflow():
 
 def example_quick_preview():
     """示例4: 快速预览（最小文件）"""
-    print("\n" + "=" * 60)
+    print("\n" + SEPARATOR)
     print("示例4: 快速预览")
-    print("=" * 60)
+    print(SEPARATOR)
     
     config = WorkflowConfig(
         output_dir='output/quick_preview',
@@ -151,9 +154,9 @@ def example_quick_preview():
 
 def main():
     """运行所有示例"""
-    print("=" * 60)
+    print(SEPARATOR)
     print("Unity 自动化工作流示例")
-    print("=" * 60)
+    print(SEPARATOR)
     print("\n本示例演示如何使用新的工作流管理器")
     print("一键完成从数据处理到 Unity 导出的全过程\n")
     
@@ -164,9 +167,9 @@ def main():
         example_animation_workflow()
         example_quick_preview()
         
-        print("\n" + "=" * 60)
+        print("\n" + SEPARATOR)
         print("所有示例完成！")
-        print("=" * 60)
+        print(SEPARATOR)
         print("\n📚 下一步:")
         print("  1. 查看生成的文件: output/ 目录")
         print("  2. 阅读文档: docs/Unity工作流说明.md")

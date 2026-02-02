@@ -346,7 +346,14 @@ public class WebSocketClient : MonoBehaviour
     
     private void ConnectStandalone()
     {
-        // TODO: Implement using WebSocketSharp or similar library
+        // Standalone WebSocket implementation requires a library like WebSocketSharp
+        // 
+        // Installation:
+        //   1. Download from: https://github.com/sta/websocket-sharp
+        //   2. Or via NuGet: Install-Package WebSocketSharp
+        //   3. Or copy DLL to Unity Assets/Plugins/
+        // 
+        // Uncomment and implement after installation:
         /*
         ws = new WebSocket(serverUrl);
         
@@ -381,7 +388,8 @@ public class WebSocketClient : MonoBehaviour
         ws.Connect();
         */
         
-        Debug.LogWarning("WebSocket implementation not available. Install WebSocketSharp or similar.");
+        Debug.LogWarning("WebSocket implementation requires WebSocketSharp library. " +
+                        "Install from https://github.com/sta/websocket-sharp and uncomment the code above.");
     }
     
     private void DisconnectStandalone()
