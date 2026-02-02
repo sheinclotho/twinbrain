@@ -5,7 +5,8 @@ This directory contains Unity C# scripts for visualizing TwinBrain brain states 
 ## Files
 
 - `BrainVisualization.cs` - Main visualization component
-- `WebSocketClient.cs` - (TODO) WebSocket client for real-time updates
+- `BrainConfigLoader.cs` - Auto-load configuration from unity_config.json
+- `WebSocketClient.cs` - WebSocket client for real-time updates
 
 ## Quick Start
 
@@ -17,30 +18,61 @@ This directory contains Unity C# scripts for visualizing TwinBrain brain states 
    - Click "+" → Add package from git URL
    - Enter: `com.unity.nuget.newtonsoft-json`
 
-### 2. Add BrainVisualization Script
+### 2. Add Scripts to Unity
 
-1. Copy `BrainVisualization.cs` to your Unity project's `Assets/Scripts/` folder
+1. Copy all `.cs` files from `unity_examples/` to your Unity project's `Assets/Scripts/` folder:
+   - `BrainVisualization.cs` - Main visualization
+   - `BrainConfigLoader.cs` - Auto-configuration loader
+   - `WebSocketClient.cs` - Real-time communication (optional)
+
 2. Create an empty GameObject in the scene (GameObject → Create Empty)
 3. Rename it to "BrainVisualization"
 4. Add the `BrainVisualization` component to it
+5. Add the `BrainConfigLoader` component to it (optional, for auto-configuration)
 
-### 3. Export Brain States from TwinBrain
+### 3. Export Data from TwinBrain
 
-Run the Python example to generate JSON files:
+Run the Python workflow to generate all necessary files:
 
 ```bash
 cd /path/to/twinbrain
-python example_unity_integration.py
+python example_unity_workflow.py
 ```
 
-This will create:
-- `output/brain_state_t100.json` - Single brain state
-- `output/brain_sequence/` - Time sequence for animation
-- `output/stimulation_response/` - Stimulation simulation
+This will create a complete export with:
+- `output/*/json/` - JSON brain states
+- `output/*/obj/` - 3D models (optional)
+- `output/*/unity_config.json` - Unity configuration
+- `output/*/materials/` - Material configurations
+- `output/*/workflow_report.json` - Execution report
+
+**Quick export:**
+```python
+from unity_integration import run_unity_workflow, WorkflowConfig
+
+config = WorkflowConfig(
+    output_dir='output/my_export',
+    export_formats=['json'],
+    time_step=5
+)
+results = run_unity_workflow(config)
+```
 
 ### 4. Configure in Unity
 
-Select the BrainVisualization GameObject and configure:
+#### Option A: Auto-Configuration (Recommended)
+
+If you added `BrainConfigLoader`:
+
+1. Select the BrainVisualization GameObject
+2. In the BrainConfigLoader component:
+   - Config Path: `path/to/output/unity_config.json`
+   - Auto Load: ✓ (checked)
+3. Press Play - settings will be loaded automatically!
+
+#### Option B: Manual Configuration
+
+Select the BrainVisualization GameObject and configure manually:
 
 #### For Single State:
 - JSON Path: `path/to/output/brain_state_t100.json`
@@ -149,9 +181,53 @@ void OnRegionClick(int regionId)
 }
 ```
 
-### Real-time Updates
+## Real-time Communication
 
-(Coming soon: WebSocket client for real-time brain state streaming)
+### Setup WebSocket Connection
+
+1. Add `WebSocketClient` component to a GameObject
+2. Start the TwinBrain server:
+
+```bash
+python -c "
+from unity_integration import BrainVisualizationServer
+server = BrainVisualizationServer(port=8765)
+server.start()
+"
+```
+
+3. In Unity, configure WebSocketClient:
+   - Server URL: `ws://localhost:8765`
+   - Auto Connect: ✓
+
+### Use WebSocket Client
+
+```csharp
+// Get reference
+WebSocketClient client = GetComponent<WebSocketClient>();
+
+// Register event handlers
+client.OnBrainStateReceived += (state) => {
+    Debug.Log($"Received brain state at time {state.metadata.time_second}");
+    // Update visualization...
+};
+
+// Request current state
+client.GetBrainState();
+
+// Request prediction
+client.RequestPrediction(nSteps: 20);
+
+// Simulate stimulation
+client.SimulateStimulation(
+    targetRegions: new int[] {10, 15, 20},
+    amplitude: 0.5f,
+    pattern: "sine"
+);
+
+// Start streaming
+client.StartStream(fps: 10, duration: 60);
+```
 
 ## Troubleshooting
 
