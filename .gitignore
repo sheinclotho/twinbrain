@@ -56,6 +56,7 @@ htmlcov/
 # Results and outputs
 results/
 outputs/
+output/
 test_file*/
 diagnostics/
 *.png
