@@ -5,6 +5,15 @@
 ## 📚 完整文档
 
 ### 主要文档
+- **[Unity工作流说明](docs/Unity工作流说明.md)** - Unity集成完整指南 🆕
+  - 自动化工作流
+  - 一键导出（JSON + OBJ）
+  - Unity配置自动生成
+  - 前后端实时通信
+  - 使用示例和最佳实践
+
+- **[Unity更新说明](docs/Unity更新说明.md)** - Unity功能更新记录 🆕
+
 - **[系统使用指南](docs/TwinBrain系统使用指南.md)** - 完整用户手册
   - 安装和配置
   - 数据准备
@@ -15,7 +24,7 @@
   - 命令行使用
   - 常见问题
 
-- **[新功能说明](docs/NEW_FEATURES.md)** - 最新功能文档 🆕
+- **[新功能说明](docs/NEW_FEATURES.md)** - 最新功能文档
   - 增强训练监控系统
   - 多步未来预测
   - 配置和使用指南
@@ -24,6 +33,7 @@
 - **[优化方向和研究思路](OPTIMIZATION_DIRECTIONS.md)** - 研究规划
   - ✅ 增强预测能力（已实现）
   - ✅ 训练监控系统（已实现）
+  - ✅ Unity工作流自动化（已实现）🆕
   - 虚拟刺激和扰动
   - 多模态融合优化
   - 因果推断和网络分析
@@ -58,28 +68,29 @@ python main.py train --config config/default.yaml
 python main.py train --config config/v3_legacy.yaml
 ```
 
-### 3. 导出大脑状态（Unity可视化）
+### 3. Unity 可视化（一键导出） 🆕
 
 ```python
-from unity_integration import BrainStateExporter
+from unity_integration import run_unity_workflow, WorkflowConfig
 
-# 初始化导出器
-exporter = BrainStateExporter(atlas_info)
-
-# 导出单个时间点
-brain_state = exporter.export_brain_state(
-    brain_activity={'fmri': fmri_data, 'eeg': eeg_data},
-    time_point=100,
-    output_path="brain_state.json"
+# 简单配置
+config = WorkflowConfig(
+    output_dir='output/unity_export',
+    export_formats=['json', 'obj'],  # 导出 JSON 和 OBJ
+    time_step=5
 )
 
-# 导出时间序列（用于动画）
-exporter.export_sequence(
-    brain_activity={'fmri': fmri_data},
-    output_dir="brain_sequence/",
-    start=0, end=200, step=5
-)
+# 一键完成：数据处理 → 格式转换 → 配置生成
+results = run_unity_workflow(config)
+
+# 自动生成：
+# - JSON 脑状态文件（用于 Unity 加载）
+# - OBJ 3D 模型（200个脑区）
+# - unity_config.json（Unity 项目配置）
+# - 材质配置文件
 ```
+
+**详细说明**: [Unity工作流说明](docs/Unity工作流说明.md)
 
 ### 4. 虚拟刺激模拟
 
@@ -154,7 +165,10 @@ server.start()  # Unity可通过ws://localhost:8765连接
 - **反向设计**: 给定目标设计刺激方案
 
 ### Unity 3D可视化
+- **自动化工作流**: 一键完成数据处理到可视化 🆕
 - **JSON导出**: 标准格式的大脑状态
+- **OBJ导出**: 200个脑区的3D模型 🆕
+- **自动配置**: Unity配置和材质自动生成 🆕
 - **实时通信**: WebSocket协议
 - **交互式展示**:
   - 脑区活跃度热图（颜色映射）
@@ -295,8 +309,16 @@ TwinBrain 系统
 
 ---
 
-## 🎉 最新更新 (2026-02-01)
+## 🎉 最新更新 (2026-02-02)
 
+### Unity 工作流自动化 🆕
+- ✅ **WorkflowManager**: 一键完成完整工作流
+- ✅ **多格式导出**: JSON + OBJ 同时导出
+- ✅ **自动配置**: Unity配置和材质自动生成
+- ✅ **前后端集成**: WebSocket 实时通信完整实现
+- 📚 详见 [Unity工作流说明](docs/Unity工作流说明.md) 和 [Unity更新说明](docs/Unity更新说明.md)
+
+### 之前更新
 - ✅ **多步未来预测**: 实现 PredictorHead 模块
 - ✅ **增强监控**: 完整的训练指标追踪系统
 - ✅ **自动化日志**: MetricsTracker 和 JSON 导出
