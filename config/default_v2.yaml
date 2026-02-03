@@ -9,9 +9,18 @@ random_seed: 42
 
 # Training parameters
 training:
+  # Warmup stage: freeze scale parameters for stable initialization
   warmup_epochs: 5
-  warmup_run_epochs: 15
-  finetune_epochs: 80
+  warmup_learning_rate: 0.00005  # Lower LR during warmup
+  
+  # Main training stage
+  main_epochs: 60
+  
+  # Fine-tuning stage
+  finetune_epochs: 30
+  finetune_temp_weight: 5.0
+  
+  # General settings
   batch_size: 1
   learning_rate: 0.0001
   weight_decay: 0.0001
@@ -50,7 +59,7 @@ loss:
   recon_norm_weight: 3.0
   recon_corr_weight: 2.0
   recon_feat_var_weight: 0.02
-  temp_weight: 5.0
+  temp_weight: 2.0  # Default temporal weight (increased during fine-tuning)
 
 # Single-modality prediction settings
 prediction:
