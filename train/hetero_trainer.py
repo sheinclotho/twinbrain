@@ -86,6 +86,7 @@ class DynamicHeteroTrainer:
         shift_invariant_temp: float = 1.0,
         auto_align: bool = False,
         auto_align_max_lag: int = 120,
+        device: Optional[torch.device] = None,
     ):
         # ---------- logger ----------
         self.logger = logging.getLogger("DynamicHeteroTrainer")
@@ -96,7 +97,7 @@ class DynamicHeteroTrainer:
         self.logger.setLevel(logging.INFO if debug else logging.WARNING)
 
         # ---------- device & config ----------
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device if device is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.hetero_data = hetero_data
         self.input_dims = input_dims or {}
         self.hidden_dim = int(hidden_dim)
