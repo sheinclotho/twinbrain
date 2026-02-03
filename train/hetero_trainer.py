@@ -537,6 +537,17 @@ class DynamicHeteroTrainer:
         epochs = num_epochs or self.num_epochs
         self.model.train()
         self.aligner.train()
+        
+        # NEW: Log training configuration at start
+        self.logger.info("=" * 80)
+        self.logger.info(f"Starting Training: {epochs} epochs")
+        self.logger.info(f"  Loss weights: recon={self.recon_weight}, temp={self.temp_weight}, align={self.align_weight}")
+        if self.enable_prediction:
+            self.logger.info(f"  ✓ Prediction ENABLED: weight={self.prediction_weight}, context={self.prediction_context_length}, steps={self.prediction_steps}")
+            self.logger.info(f"    Using autoregressive multi-step prediction with PredictorHead")
+        else:
+            self.logger.info(f"  ✗ Prediction DISABLED")
+        self.logger.info("=" * 80)
 
         # batch_rescale 默认配置防御
         if "warmup_epochs" not in self.batch_rescale_cfg:
@@ -576,6 +587,7 @@ class DynamicHeteroTrainer:
         for epoch in range(1, epochs + 1):
             start = time.time()
             total_loss = total_align = total_temp = total_recon = total_recon_norm = total_spec = 0.0
+            total_predictor = 0.0  # NEW: Track PredictorHead loss
             batches = 0
 
             # warmup 结束后解冻 scale
@@ -671,6 +683,10 @@ class DynamicHeteroTrainer:
                 predictor_loss = torch.tensor(0.0, device=self.device)
                 if self.enable_prediction and self.predictor is not None:
                     # Use PredictorHead for multi-step prediction with sliding window
+                    # Log once per epoch to confirm prediction is running
+                    if data_idx == 0 and epoch % 10 == 0 and verbose:
+                        self.logger.info(f"[Prediction] Running autoregressive prediction (context={self.prediction_context_length}, steps={self.prediction_steps})")
+                    
                     for nt in self.metadata[0]:
                         seq = None
                         if isinstance(proj_seq_dict, dict):
@@ -709,7 +725,7 @@ class DynamicHeteroTrainer:
                             context_seq = seq[:, context_start:context_end, :]
                             target_seq = seq[:, target_start:target_end, :]
                             
-                            # Predict using PredictorHead
+                            # Predict using PredictorHead (autoregressive)
                             predictions, _ = self.predictor(context_seq, return_attention=False)
                             
                             # Compute prediction loss for this window
@@ -720,6 +736,9 @@ class DynamicHeteroTrainer:
                         # Average over all windows
                         if num_windows > 0:
                             predictor_loss = predictor_loss + (window_loss / num_windows)
+                            # Log window count on first batch to show prediction is active
+                            if data_idx == 0 and epoch % 10 == 0 and verbose:
+                                self.logger.info(f"  [{nt}] Trained on {num_windows} prediction windows (MSE={window_loss/num_windows:.6f})")
 
                 for nt in self.metadata[0]:
                     seq = None
@@ -973,6 +992,9 @@ class DynamicHeteroTrainer:
                 total_recon += float(recon_loss.detach().cpu())
                 total_recon_norm += float(recon_norm_loss.detach().cpu())
                 total_spec += float(spec_loss_total.detach().cpu())
+                # NEW: Track predictor loss
+                if self.enable_prediction and predictor_loss.numel() != 0:
+                    total_predictor += float(predictor_loss.detach().cpu())
                 batches += 1
 
                 if data_idx == 0 and verbose:
@@ -988,6 +1010,7 @@ class DynamicHeteroTrainer:
             avg_recon = total_recon / batches
             avg_recon_norm = total_recon_norm / batches
             avg_spec = total_spec / batches
+            avg_predictor = total_predictor / batches  # NEW: Average predictor loss
 
             self.loss_log["total"].append(avg_total)
             self.loss_log["align"].append(avg_align)
@@ -995,6 +1018,11 @@ class DynamicHeteroTrainer:
             self.loss_log["recon"].append(avg_recon)
             self.loss_log["recon_norm"].append(avg_recon_norm)
             self.loss_log["spec"].append(avg_spec)
+            # NEW: Log predictor loss
+            if self.enable_prediction:
+                if "predictor" not in self.loss_log:
+                    self.loss_log["predictor"] = []
+                self.loss_log["predictor"].append(avg_predictor)
 
             try:
                 self.scheduler.step()
@@ -1019,6 +1047,9 @@ class DynamicHeteroTrainer:
                     recon_norm=avg_recon_norm,
                     spec=avg_spec
                 )
+                # NEW: Log prediction loss if enabled
+                if self.enable_prediction:
+                    self.metrics_tracker.log_epoch(epoch, {'loss/prediction': avg_predictor})
                 # Log relative errors
                 for nt, err in rel_error_epoch.items():
                     self.metrics_tracker.log_epoch(epoch, {f'rel_error/{nt}': err})
@@ -1061,11 +1092,18 @@ class DynamicHeteroTrainer:
                     no_improve = 0
 
             if verbose:
-                self.logger.info(
+                # Build log message with prediction loss if enabled
+                log_msg = (
                     f"[Epoch {epoch:3d}] total={avg_total:.6f} align={avg_align:.6f} "
                     f"temp={avg_temp:.6f} recon={avg_recon:.6f} recon_norm={avg_recon_norm:.6f} "
-                    f"spec={avg_spec:.6f} time={time.time()-start:.2f}s"
+                    f"spec={avg_spec:.6f}"
                 )
+                # NEW: Add predictor loss to logging
+                if self.enable_prediction:
+                    log_msg += f" pred={avg_predictor:.6f}"
+                log_msg += f" time={time.time()-start:.2f}s"
+                
+                self.logger.info(log_msg)
                 self.logger.info(f"[Epoch {epoch}] relative_error={rel_error_epoch}")
 
         # Training completed - save metrics and print summary
