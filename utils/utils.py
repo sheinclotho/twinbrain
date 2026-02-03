@@ -1,5 +1,6 @@
 import numpy as np
 import os
+import random
 import torch
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -22,7 +23,7 @@ plt.rcParams['font.family'] = 'Arial'
 plt.rcParams['axes.unicode_minus'] = False   
 
 
-def set_random_seed(seed: int = 42):
+def set_random_seed(seed: int = 42, deterministic: bool = True):
     """
     Set random seeds for reproducibility and proper initialization.
     
@@ -31,9 +32,10 @@ def set_random_seed(seed: int = 42):
     
     Args:
         seed: Random seed value (default: 42)
+        deterministic: If True, ensures deterministic behavior on CUDA.
+                      May impact performance. Set to False for faster training
+                      with less reproducibility (default: True)
     """
-    import random
-    
     # Python random
     random.seed(seed)
     
@@ -48,9 +50,10 @@ def set_random_seed(seed: int = 42):
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)  # For multi-GPU setups
         
-        # Ensure deterministic behavior (optional, may impact performance)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+        # Ensure deterministic behavior (may impact performance)
+        if deterministic:
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
 
 
 def add_gaussian_noise(features: np.ndarray, std: float = 0.1) -> np.ndarray:
