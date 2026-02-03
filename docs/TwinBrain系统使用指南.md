@@ -41,9 +41,10 @@ TwinBrain（数字孪生脑）是一个基于深度学习的多模态大脑活�
 - 支持跨模态信息传递
 
 #### 3. 时序预测能力
-- 基于历史状态预测未来脑活动
-- 支持多步预测
-- 可施加虚拟刺激观察响应
+- **自回归多步预测**：基于历史状态预测未来脑活动
+- 支持多步预测（训练中已实现）
+- 使用滑动窗口和teacher forcing进行训练
+- 注意：当前版本仅支持单模态内预测，不支持模态间双向预测（如fMRI→EEG）
 
 #### 4. Unity集成
 - 输出标准JSON格式
@@ -304,6 +305,7 @@ training:
 - 重建损失（权重调整）
 - 时间对齐损失（增强）
 - 跨模态对齐损失
+- 可选：多步预测损失（需配置启用）
 
 #### 第5阶段：诊断和评估
 
@@ -344,13 +346,27 @@ next_state = predict_next_state(model, current_state)
 预测未来多个时间步：
 
 ```python
+# 训练时启用预测功能
+# 在config/default.yaml中配置
+prediction:
+  enabled: true
+  context_length: 50  # 使用最后50步
+  steps: 10  # 预测未来10步
+  weight: 0.1  # 预测损失权重
+
+# 训练时会自动学习预测能力
+# 训练完成后可用于推理
 future_states = predict_multiple_steps(
     model, 
     initial_state, 
-    n_steps=10,
-    stimulation=None  # 可选：施加虚拟刺激
+    n_steps=10
 )
 ```
+
+**注意**：
+- 当前实现仅支持单模态内预测（fMRI预测fMRI，EEG预测EEG）
+- 不支持模态间预测（如fMRI→EEG或EEG→fMRI）
+- 使用自回归方式逐步预测未来状态
 
 ### 施加虚拟刺激
 
@@ -433,7 +449,7 @@ response = simulate_stimulation(
     "subject": "sub-01",
     "atlas": "Schaefer200",
     "time_point": 100,
-    "model_version": "v4"
+    "model_version": "current"
   }
 }
 ```
@@ -540,7 +556,7 @@ public class BrainVisualization : MonoBehaviour
 配置文件使用YAML格式，包含以下部分：
 
 ```yaml
-version: "v4"
+version: "current"
 description: "配置说明"
 
 # 路径配置
@@ -612,28 +628,28 @@ eeg:
 |-----|--------|------|
 | hidden_dim | 128 | 隐藏层维度 |
 | num_gnn_layers | 4 | GNN层数 |
-| decoder_layers | 3 | 解码器层数（v4=3, v3=2） |
-| dropout | 0.3 | Dropout比例 |
+| decoder_layers | 3 | 解码器层数 |
+| dropout | 0.1 | Dropout比例 |
 | temporal_T | 200 | 时间投影维度 |
 | spatial_T | 384 | 空间时间维度 |
 
 **调优建议**：
 - `hidden_dim`: 更大的值能捕获更复杂的模式，但增加计算量（64/128/256）
 - `num_gnn_layers`: 更多层能传播更远的信息，但可能过拟合（2-6层）
-- `decoder_layers`: v4使用3层比v3的2层效果更好
-- `dropout`: 0.2-0.4之间，防止过拟合
+- `decoder_layers`: 3层解码器提供良好的重建质量
+- `dropout`: 0.1-0.3之间，防止过拟合
 
 #### 损失函数权重
 
 | 参数 | 默认值 | 说明 |
 |-----|--------|------|
 | recon_weight | 1.0 | 重建损失权重 |
-| temp_weight | 5.0 | 时间对齐权重（v4=5.0, v3=1.0） |
+| temp_weight | 5.0 | 时间对齐权重（强化版） |
 | recon_norm_weight | 3.0 | 归一化重建损失权重 |
-| align_weight | 0.1 | 跨模态对齐权重 |
+| recon_corr_weight | 2.0 | 相关性重建权重 |
 
 **调优建议**：
-- `temp_weight`: v4增强到5.0，显著改善时间对齐
+- `temp_weight`: 5.0提供强化的时间对齐
 - 权重比例比绝对值更重要
 - 如果重建质量差，增大`recon_weight`
 - 如果时间对齐差，增大`temp_weight`
@@ -667,45 +683,38 @@ eeg:
     dropout: 0.2
 ```
 
-### 配置版本对比
-
-#### v3 (legacy)
-
-```yaml
-# config/v3_legacy.yaml
-training:
-  finetune_epochs: 40
-model:
-  decoder_layers: 2
-loss:
-  temp_weight: 1.0
-```
-
-特点：
-- 较短的训练周期
-- 较浅的解码器
-- 较弱的时间对齐
-
-适用：实验复现、快速验证
-
-#### v4 (default - 推荐)
+### 当前配置特点
 
 ```yaml
 # config/default.yaml
 training:
+  warmup_epochs: 5
   finetune_epochs: 80
+  learning_rate: 0.0001
+  gradient_accumulation_steps: 1
+  
 model:
+  hidden_dim: 128
   decoder_layers: 3
+  dropout: 0.1
+
 loss:
-  temp_weight: 5.0
+  recon_weight: 1.0
+  temp_weight: 5.0  # 强化时间对齐
+  recon_norm_weight: 3.0
+  
+prediction:
+  enabled: false  # 可启用多步预测
+  context_length: 50  # 使用历史步数
+  steps: 10  # 预测未来步数
+  weight: 0.1  # 预测损失权重
 ```
 
-特点：
-- 更长的训练提升性能
-- 更深的解码器捕获复杂模式
-- 更强的时间对齐
-
-适用：正式实验、论文结果
+主要特点：
+- 深度解码器（3层）提升重建质量
+- 强化的时间对齐（temp_weight=5.0）
+- 支持可选的多步预测功能
+- 梯度累积支持
 
 ---
 
@@ -863,7 +872,7 @@ model:
 
 ### Q3: 时间对齐效果不好？
 
-使用v4配置，它有更强的时间对齐：
+使用默认配置，它有更强的时间对齐：
 ```bash
 python main.py train --config config/default.yaml
 ```
@@ -941,18 +950,18 @@ python -m json.tool brain_state.json
 - `brain_state.connections`
 - `metadata`
 
-### Q8: 如何复现论文结果？
+### Q8: 如何启用多步预测功能？
 
-使用v3配置进行复现：
-```bash
-python main.py train --config config/v3_legacy.yaml
-```
-
-设置相同的随机种子：
+在配置文件中启用：
 ```yaml
-training:
-  random_seed: 42
+prediction:
+  enabled: true  # 启用预测
+  context_length: 50  # 使用历史步数
+  steps: 10  # 预测未来步数
+  weight: 0.1  # 损失权重
 ```
+
+训练时会学习预测能力，训练完成后可用于推理。
 
 ### Q9: 内存不足导致程序崩溃？
 
@@ -990,8 +999,8 @@ data:
 twinbrain/
 ├── main.py                   # 主入口
 ├── config/                   # 配置文件
-│   ├── default.yaml          # v4默认配置
-│   ├── v3_legacy.yaml        # v3兼容配置
+│   ├── default.yaml          # 默认配置
+│   ├── v3_legacy.yaml        # 向后兼容配置
 │   └── export.yaml           # 导出配置
 ├── workflows/                # 工作流
 │   ├── training.py           # 训练流程
@@ -1041,6 +1050,6 @@ twinbrain/
 
 ---
 
-**文档版本**: 1.0  
-**最后更新**: 2026-01-31  
+**文档版本**: 2.0  
+**最后更新**: 2026-02-02  
 **维护者**: TwinBrain Development Team
