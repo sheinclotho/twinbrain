@@ -4,6 +4,9 @@
 version: "v4"
 description: "Improved training with stronger temporal alignment and deeper decoder"
 
+# Random seed for reproducibility
+random_seed: 42
+
 # Training parameters
 training:
   warmup_epochs: 5

@@ -145,6 +145,13 @@ def main():
         os.environ['CUDA_VISIBLE_DEVICES'] = ''
         logger.info("CUDA disabled by command line flag")
     
+    # Initialize random seeds for reproducibility and proper CUDA initialization
+    # This must be done before any model creation or CUDA operations
+    from utils.utils import set_random_seed
+    seed = config.get('random_seed', 42)
+    set_random_seed(seed)
+    logger.info(f"Random seed initialized: {seed}")
+    
     # Dry run - just print config and exit
     if args.dry_run:
         logger.info("Dry run mode - printing configuration")

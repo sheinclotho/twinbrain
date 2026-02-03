@@ -4,6 +4,9 @@
 version: "v2"
 description: "V2 configuration with cross-modal bidirectional prediction (fMRI <-> EEG)"
 
+# Random seed for reproducibility
+random_seed: 42
+
 # Training parameters
 training:
   warmup_epochs: 5

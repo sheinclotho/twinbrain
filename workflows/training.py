@@ -56,6 +56,13 @@ class TrainingWorkflow:
         if not self.subjects:
             raise ValueError(f"No subjects found in {self.base_dir}")
         
+        # Initialize random seeds for reproducibility and CUDA safety
+        # This prevents THPGenerator_initDefaultGenerator errors
+        from utils.utils import set_random_seed
+        seed = self.config.get('random_seed', 42)
+        set_random_seed(seed)
+        logger.info(f"Random seed set to {seed} in TrainingWorkflow")
+        
         logger.info(f"Found {len(self.subjects)} subjects in {self.base_dir}")
     
     def _setup_paths(self, subject_dir: Path) -> Dict[str, Path]:
