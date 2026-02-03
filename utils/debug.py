@@ -30,145 +30,149 @@ def diagnostics_plot_all(trainer, nt='fmri', node_idx=0, feat_idx=0, save_dir=No
     Call this after trainer is initialized (before/after training).
     Returns list of saved file paths.
     """
-    device = trainer.device
-    save_dir = save_dir or getattr(trainer, "diagnostic_dir", "./diagnostics")
-    os.makedirs(save_dir, exist_ok=True)
+    trainer.model.eval()
+    try:
+        device = trainer.device
+        save_dir = save_dir or getattr(trainer, "diagnostic_dir", "./diagnostics")
+        os.makedirs(save_dir, exist_ok=True)
 
-    data = trainer.data_list[0].to(device)
-    with torch.no_grad():
-        enc_out = trainer.graph_encoder(data)
-        x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict = enc_out
-        outputs = trainer.model(
-            data=data,
-            edge_index_dict=edge_index_dict,
-            encoded_dict=x_dict,
-            num_nodes_dict=num_nodes_dict,
-            stats_dict=stats_dict,
-        )
-        if len(outputs) >= 7:
-            z_dict, gru_seq_dict, proj_seq_dict, recon_seq_dict, recon_seq_scaled, global_seq, recon_feature_dict = outputs[:7]
+        data = trainer.data_list[0].to(device)
+        with torch.no_grad():
+            enc_out = trainer.graph_encoder(data)
+            x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict = enc_out
+            outputs = trainer.model(
+                data=data,
+                edge_index_dict=edge_index_dict,
+                encoded_dict=x_dict,
+                num_nodes_dict=num_nodes_dict,
+                stats_dict=stats_dict,
+            )
+            if len(outputs) >= 7:
+                z_dict, gru_seq_dict, proj_seq_dict, recon_seq_dict, recon_seq_scaled, global_seq, recon_feature_dict = outputs[:7]
+            else:
+                raise RuntimeError("model did not return expected outputs with recon_feature_dict")
+
+        if nt not in recon_feature_dict:
+            raise RuntimeError(f"{nt} not found in model outputs")
+
+        rf = recon_feature_dict[nt].detach().cpu()        # (N,T_rf,F)
+        recon_denorm = recon_seq_dict[nt].detach().cpu()  # (N,T_rf,F)
+        proj = proj_seq_dict[nt].detach().cpu()           # (N,T_proj,Hp)
+        gru_out = gru_seq_dict.get(nt, None)
+        if gru_out is not None:
+            gru_out = gru_out.detach().cpu()              # (N,T_gru,H)
+
+        # target and stats
+        target_raw = getattr(data[nt], "x_seq", None)
+        stats = stats_dict.get(nt, {})
+        mean = stats.get("mean", None)
+        std = stats.get("std", None)
+        if target_raw is None or mean is None or std is None:
+            raise RuntimeError("missing target or stats for diagnostics")
+
+        # resample target to rf time length
+        target_res = trainer._resample_time(target_raw.to(device), rf.shape[1]).detach().cpu()  # (N, T_rf, F)
+        # resample proj and gru_out to rf time length for consistent plotting
+        proj_rs = _resample_tensor_time(proj, rf.shape[1])
+        gru_rs = _resample_tensor_time(gru_out, rf.shape[1]) if gru_out is not None else None
+
+        N, T, F = rf.shape
+        node_idx = int(min(node_idx, N-1))
+        feat_idx = int(min(feat_idx, F-1))
+
+        # build normalized target
+        mean_exp = mean.expand(-1, rf.shape[1], -1)[:N, :T, :F].cpu()
+        std_exp = std.expand(-1, rf.shape[1], -1)[:N, :T, :F].cpu()
+        target_norm = (target_res - mean_exp) / (std_exp + 1e-8)
+
+        t = np.arange(T)
+
+        saved = []
+
+        # 1) time series overlay
+        plt.figure(figsize=(10,3))
+        plt.plot(t, target_norm[node_idx,:,feat_idx].numpy(), label='target_norm', linewidth=1.2)
+        plt.plot(t, rf[node_idx,:,feat_idx].numpy(), label='recon_feat (norm)', linewidth=1.0)
+        plt.plot(t, recon_denorm[node_idx,:,feat_idx].numpy(), label='recon_denorm', linewidth=0.8, alpha=0.6)
+        plt.legend(); plt.title(f"{nt} node={node_idx} feat={feat_idx}")
+        f1 = os.path.join(save_dir, f"{nt}_ts_node{node_idx}_feat{feat_idx}.png")
+        plt.tight_layout(); plt.savefig(f1, dpi=150); plt.close()
+        saved.append(f1)
+
+        # 2) proj channels (first few)
+        Hp = proj_rs.shape[2]
+        n_ch = min(max_hidden_ch, Hp)
+        fig, axs = plt.subplots(n_ch, 1, figsize=(10, 2*n_ch), sharex=True)
+        for i in range(n_ch):
+            axs[i].plot(t, proj_rs[node_idx,:,i].numpy(), color='tab:blue')
+            axs[i].set_ylabel(f"ch{i}")
+        fig.suptitle(f"{nt} proj channels node={node_idx}")
+        f2 = os.path.join(save_dir, f"{nt}_proj_node{node_idx}_chs.png")
+        plt.tight_layout(); fig.savefig(f2, dpi=150); plt.close()
+        saved.append(f2)
+
+        # 3) gru channels if present
+        if gru_rs is not None:
+            Hg = gru_rs.shape[2]
+            n_chg = min(max_hidden_ch, Hg)
+            fig, axs = plt.subplots(n_chg, 1, figsize=(10, 2*n_chg), sharex=True)
+            for i in range(n_chg):
+                axs[i].plot(t, gru_rs[node_idx,:,i].numpy(), color='tab:orange')
+                axs[i].set_ylabel(f"gch{i}")
+            fig.suptitle(f"{nt} gru_out channels node={node_idx}")
+            f3 = os.path.join(save_dir, f"{nt}_gru_node{node_idx}_chs.png")
+            plt.tight_layout(); fig.savefig(f3, dpi=150); plt.close()
+            saved.append(f3)
         else:
-            raise RuntimeError("model did not return expected outputs with recon_feature_dict")
+            f3 = None
 
-    if nt not in recon_feature_dict:
-        raise RuntimeError(f"{nt} not found in model outputs")
+        # 4) PSD comparison
+        from scipy.signal import welch
+        fs = 1.0
+        f_t, P_t = welch(target_norm[node_idx,:,feat_idx].numpy(), fs=fs, nperseg=min(128, T))
+        f_r, P_r = welch(rf[node_idx,:,feat_idx].numpy(), fs=fs, nperseg=min(128, T))
+        plt.figure(figsize=(6,3))
+        plt.semilogy(f_t, P_t + 1e-12, label='target_norm PSD')
+        plt.semilogy(f_r, P_r + 1e-12, label='recon_feat PSD')
+        plt.legend(); plt.title(f"{nt} PSD node={node_idx} feat={feat_idx}")
+        f4 = os.path.join(save_dir, f"{nt}_psd_node{node_idx}_feat{feat_idx}.png")
+        plt.tight_layout(); plt.savefig(f4, dpi=150); plt.close()
+        saved.append(f4)
 
-    rf = recon_feature_dict[nt].detach().cpu()        # (N,T_rf,F)
-    recon_denorm = recon_seq_dict[nt].detach().cpu()  # (N,T_rf,F)
-    proj = proj_seq_dict[nt].detach().cpu()           # (N,T_proj,Hp)
-    gru_out = gru_seq_dict.get(nt, None)
-    if gru_out is not None:
-        gru_out = gru_out.detach().cpu()              # (N,T_gru,H)
+        # 5) xcorr
+        tv = target_norm[node_idx,:,feat_idx].numpy()
+        rv = rf[node_idx,:,feat_idx].numpy()
+        tvz = (tv - tv.mean()) / (tv.std()+1e-8)
+        rvz = (rv - rv.mean()) / (rv.std()+1e-8)
+        corr = correlate(tvz, rvz, mode='full')
+        lags = np.arange(-len(tvz)+1, len(tvz))
+        best_idx = np.argmax(corr)
+        best_lag = lags[best_idx]
+        best_corr = corr[best_idx] / len(tvz)
+        plt.figure(figsize=(6,3)); plt.plot(lags, corr); plt.axvline(best_lag, color='r', linestyle='--'); plt.title(f"{nt} xcorr best_lag={best_lag} corr={best_corr:.4f}")
+        f5 = os.path.join(save_dir, f"{nt}_xcorr_node{node_idx}_feat{feat_idx}.png")
+        plt.tight_layout(); plt.savefig(f5, dpi=150); plt.close()
+        saved.append(f5)
 
-    # target and stats
-    target_raw = getattr(data[nt], "x_seq", None)
-    stats = stats_dict.get(nt, {})
-    mean = stats.get("mean", None)
-    std = stats.get("std", None)
-    if target_raw is None or mean is None or std is None:
-        raise RuntimeError("missing target or stats for diagnostics")
-
-    # resample target to rf time length
-    target_res = trainer._resample_time(target_raw.to(device), rf.shape[1]).detach().cpu()  # (N, T_rf, F)
-    # resample proj and gru_out to rf time length for consistent plotting
-    proj_rs = _resample_tensor_time(proj, rf.shape[1])
-    gru_rs = _resample_tensor_time(gru_out, rf.shape[1]) if gru_out is not None else None
-
-    N, T, F = rf.shape
-    node_idx = int(min(node_idx, N-1))
-    feat_idx = int(min(feat_idx, F-1))
-
-    # build normalized target
-    mean_exp = mean.expand(-1, rf.shape[1], -1)[:N, :T, :F].cpu()
-    std_exp = std.expand(-1, rf.shape[1], -1)[:N, :T, :F].cpu()
-    target_norm = (target_res - mean_exp) / (std_exp + 1e-8)
-
-    t = np.arange(T)
-
-    saved = []
-
-    # 1) time series overlay
-    plt.figure(figsize=(10,3))
-    plt.plot(t, target_norm[node_idx,:,feat_idx].numpy(), label='target_norm', linewidth=1.2)
-    plt.plot(t, rf[node_idx,:,feat_idx].numpy(), label='recon_feat (norm)', linewidth=1.0)
-    plt.plot(t, recon_denorm[node_idx,:,feat_idx].numpy(), label='recon_denorm', linewidth=0.8, alpha=0.6)
-    plt.legend(); plt.title(f"{nt} node={node_idx} feat={feat_idx}")
-    f1 = os.path.join(save_dir, f"{nt}_ts_node{node_idx}_feat{feat_idx}.png")
-    plt.tight_layout(); plt.savefig(f1, dpi=150); plt.close()
-    saved.append(f1)
-
-    # 2) proj channels (first few)
-    Hp = proj_rs.shape[2]
-    n_ch = min(max_hidden_ch, Hp)
-    fig, axs = plt.subplots(n_ch, 1, figsize=(10, 2*n_ch), sharex=True)
-    for i in range(n_ch):
-        axs[i].plot(t, proj_rs[node_idx,:,i].numpy(), color='tab:blue')
-        axs[i].set_ylabel(f"ch{i}")
-    fig.suptitle(f"{nt} proj channels node={node_idx}")
-    f2 = os.path.join(save_dir, f"{nt}_proj_node{node_idx}_chs.png")
-    plt.tight_layout(); fig.savefig(f2, dpi=150); plt.close()
-    saved.append(f2)
-
-    # 3) gru channels if present
-    if gru_rs is not None:
-        Hg = gru_rs.shape[2]
-        n_chg = min(max_hidden_ch, Hg)
-        fig, axs = plt.subplots(n_chg, 1, figsize=(10, 2*n_chg), sharex=True)
-        for i in range(n_chg):
-            axs[i].plot(t, gru_rs[node_idx,:,i].numpy(), color='tab:orange')
-            axs[i].set_ylabel(f"gch{i}")
-        fig.suptitle(f"{nt} gru_out channels node={node_idx}")
-        f3 = os.path.join(save_dir, f"{nt}_gru_node{node_idx}_chs.png")
-        plt.tight_layout(); fig.savefig(f3, dpi=150); plt.close()
-        saved.append(f3)
-    else:
-        f3 = None
-
-    # 4) PSD comparison
-    from scipy.signal import welch
-    fs = 1.0
-    f_t, P_t = welch(target_norm[node_idx,:,feat_idx].numpy(), fs=fs, nperseg=min(128, T))
-    f_r, P_r = welch(rf[node_idx,:,feat_idx].numpy(), fs=fs, nperseg=min(128, T))
-    plt.figure(figsize=(6,3))
-    plt.semilogy(f_t, P_t + 1e-12, label='target_norm PSD')
-    plt.semilogy(f_r, P_r + 1e-12, label='recon_feat PSD')
-    plt.legend(); plt.title(f"{nt} PSD node={node_idx} feat={feat_idx}")
-    f4 = os.path.join(save_dir, f"{nt}_psd_node{node_idx}_feat{feat_idx}.png")
-    plt.tight_layout(); plt.savefig(f4, dpi=150); plt.close()
-    saved.append(f4)
-
-    # 5) xcorr
-    tv = target_norm[node_idx,:,feat_idx].numpy()
-    rv = rf[node_idx,:,feat_idx].numpy()
-    tvz = (tv - tv.mean()) / (tv.std()+1e-8)
-    rvz = (rv - rv.mean()) / (rv.std()+1e-8)
-    corr = correlate(tvz, rvz, mode='full')
-    lags = np.arange(-len(tvz)+1, len(tvz))
-    best_idx = np.argmax(corr)
-    best_lag = lags[best_idx]
-    best_corr = corr[best_idx] / len(tvz)
-    plt.figure(figsize=(6,3)); plt.plot(lags, corr); plt.axvline(best_lag, color='r', linestyle='--'); plt.title(f"{nt} xcorr best_lag={best_lag} corr={best_corr:.4f}")
-    f5 = os.path.join(save_dir, f"{nt}_xcorr_node{node_idx}_feat{feat_idx}.png")
-    plt.tight_layout(); plt.savefig(f5, dpi=150); plt.close()
-    saved.append(f5)
-
-    # 6) LS-scaling alpha & rel per-feature summary (flatten over nodes/time)
-    r_flat = rf.reshape(-1, rf.shape[-1]).numpy()
-    t_flat = target_norm.reshape(-1, target_norm.shape[-1]).numpy()
-    alphas = []
-    rels = []
-    for f in range(r_flat.shape[1]):
-        rvf = r_flat[:,f]
-        tvf = t_flat[:,f]
-        den = (rvf*rvf).sum() + 1e-8
-        alpha = (rvf*tvf).sum() / den if den>0 else 0.0
-        alphas.append(alpha)
-        r_scaled = rvf * alpha
-        rel = np.linalg.norm(r_scaled - tvf) / (np.linalg.norm(tvf) + 1e-8)
-        rels.append(rel)
-    print(f"[DIAG_EXTRA] {nt} alphas mean={np.mean(alphas):.4f} med={np.median(alphas):.4f}")
-    print(f"[DIAG_EXTRA] {nt} rels mean={np.mean(rels):.4f} med={np.median(rels):.4f}")
-    return saved
+        # 6) LS-scaling alpha & rel per-feature summary (flatten over nodes/time)
+        r_flat = rf.reshape(-1, rf.shape[-1]).numpy()
+        t_flat = target_norm.reshape(-1, target_norm.shape[-1]).numpy()
+        alphas = []
+        rels = []
+        for f in range(r_flat.shape[1]):
+            rvf = r_flat[:,f]
+            tvf = t_flat[:,f]
+            den = (rvf*rvf).sum() + 1e-8
+            alpha = (rvf*tvf).sum() / den if den>0 else 0.0
+            alphas.append(alpha)
+            r_scaled = rvf * alpha
+            rel = np.linalg.norm(r_scaled - tvf) / (np.linalg.norm(tvf) + 1e-8)
+            rels.append(rel)
+        print(f"[DIAG_EXTRA] {nt} alphas mean={np.mean(alphas):.4f} med={np.median(alphas):.4f}")
+        print(f"[DIAG_EXTRA] {nt} rels mean={np.mean(rels):.4f} med={np.median(rels):.4f}")
+        return saved
+    finally:
+        trainer.model.train()
 
 
 def run_forward_diagnostics(trainer,
