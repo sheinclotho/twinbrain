@@ -228,11 +228,13 @@ TwinBrain 使用三阶段训练策略：
    - 全参数训练，使用默认损失权重
    - 这是主要的训练阶段
 
-3. **微调阶段（Fine-tuning）**: 30 epochs
-   - 提高时序对齐权重（temp_weight）
-   - 进一步优化模型性能
+3. **Fine-tuning Stage** (30 epochs):
+   - Increased temporal alignment weight
+   - Further optimize model performance
 
-总训练轮数：95 epochs
+**Total training: 95 epochs** (same as before, but better distributed)
+- Before: Warmup 15 + Fine-tuning 80 = 95
+- After: Warmup 5 + Main 60 + Fine-tuning 30 = 95
 
 ### 版本差异
 
