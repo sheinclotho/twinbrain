@@ -1,4 +1,5 @@
-import os, math
+import os
+import math
 import random
 import numpy as np
 
@@ -14,7 +15,6 @@ torch.manual_seed(_INIT_SEED)
 
 from scipy.signal import welch, correlate
 import torch.nn.functional as F
-import os
 import logging
 from typing import Optional, Dict, Any
 
