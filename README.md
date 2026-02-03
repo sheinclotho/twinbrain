@@ -196,10 +196,11 @@ twinbrain/
 version: "v4"
 description: "配置说明"
 
-# 训练参数
+# 训练参数 - 三阶段训练结构
 training:
-  warmup_epochs: 5
-  finetune_epochs: 80
+  warmup_epochs: 5          # 预热阶段（冻结scale参数）
+  main_epochs: 60           # 主训练阶段（全参数训练）
+  finetune_epochs: 30       # 微调阶段（增强时序对齐）
   learning_rate: 0.0001
 
 # 模型架构
@@ -210,10 +211,30 @@ model:
 # 损失函数权重
 loss:
   recon_weight: 1.0
-  temp_weight: 5.0
+  temp_weight: 2.0          # 主训练阶段的默认值，微调时会提高到5.0
 
 # 更多配置...
 ```
+
+### 训练流程说明
+
+TwinBrain 使用三阶段训练策略：
+
+1. **预热阶段（Warmup）**: 5 epochs
+   - 冻结 scale 参数，稳定初始化
+   - 可选使用较低学习率
+
+2. **主训练阶段（Main Training）**: 60 epochs
+   - 全参数训练，使用默认损失权重
+   - 这是主要的训练阶段
+
+3. **Fine-tuning Stage** (30 epochs):
+   - Increased temporal alignment weight
+   - Further optimize model performance
+
+**Total training: 95 epochs** (same as before, but better distributed)
+- Before: Warmup 15 + Fine-tuning 80 = 95
+- After: Warmup 5 + Main 60 + Fine-tuning 30 = 95
 
 ### 版本差异
 

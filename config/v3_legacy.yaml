@@ -10,9 +10,13 @@ random_seed: 42
 
 # Training parameters
 training:
+  # Legacy v3 behavior: kept for backward compatibility
   warmup_epochs: 5
-  warmup_run_epochs: 10  # warmup_epochs + 5
+  warmup_run_epochs: 10  # Deprecated: use main_epochs instead
+  main_epochs: 0  # Not used in v3, but here for compatibility
   finetune_epochs: 40
+  finetune_temp_weight: 1.0  # v3 used weaker temporal alignment
+  
   batch_size: 1
   learning_rate: 0.0001
   weight_decay: 0.0001

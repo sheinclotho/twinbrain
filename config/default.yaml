@@ -9,13 +9,22 @@ random_seed: 42
 
 # Training parameters
 training:
-  warmup_epochs: 5
-  warmup_run_epochs: 15  # warmup_epochs + 10
-  finetune_epochs: 80
+  # Warmup stage: freeze scale parameters for stable initialization
+  warmup_epochs: 5  # Number of epochs to freeze scale parameters
+  warmup_learning_rate: 0.00005  # Lower LR during warmup for stability
+  
+  # Main training stage: primary training with default loss weights
+  main_epochs: 60  # Main training phase (previously embedded in warmup_run_epochs + part of finetune)
+  
+  # Fine-tuning stage: refine with stronger temporal alignment
+  finetune_epochs: 30  # Fine-tuning with increased temp_weight (reduced from 80)
+  finetune_temp_weight: 5.0  # Increased temporal weight for fine-tuning
+  
+  # General training settings
   batch_size: 1
   learning_rate: 0.0001
   weight_decay: 0.0001
-  gradient_accumulation_steps: 1  # NEW: Accumulate gradients over N steps (1=no accumulation)
+  gradient_accumulation_steps: 1  # Accumulate gradients over N steps (1=no accumulation)
   
   # Learning rate multipliers
   feature_lr_mul: 12.0
@@ -50,7 +59,8 @@ loss:
   recon_norm_weight: 3.0
   recon_corr_weight: 2.0
   recon_feat_var_weight: 0.02
-  temp_weight: 5.0  # Stronger temporal alignment than v3 (was 1.0)
+  temp_weight: 2.0  # Default temporal weight for warmup and main training (was 5.0)
+  # Note: temp_weight is increased during fine-tuning stage (see training.finetune_temp_weight)
 
 # Prediction settings (NEW)
 prediction:

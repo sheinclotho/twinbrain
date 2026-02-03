@@ -12,6 +12,10 @@ from torch_geometric.data import HeteroData
 from train.dynamic_hetero_gnn import DynamicHeteroGNN
 from train.coder import GraphEncoder
 
+# CUDA initialization seed: used for safe PyTorch module creation before config seed is applied
+# This prevents THPGenerator_initDefaultGenerator errors when prediction is enabled
+_CUDA_INIT_SEED = 42
+
 # Aligners may be LatentAligner or TemporalCrossAligner depending on availability
 try:
     from train.aligner import LatentAligner
@@ -95,6 +99,40 @@ class DynamicHeteroTrainer:
         metrics_output_dir: Optional[str] = None,
         gradient_accumulation_steps: int = 1,  # NEW: Gradient accumulation
     ):
+        # ---------- Early random seed initialization ----------
+        # CRITICAL: Must initialize random seeds BEFORE any CUDA operations
+        # to prevent THPGenerator_initDefaultGenerator errors when prediction is enabled.
+        #
+        # NOTE: This uses _CUDA_INIT_SEED for safe CUDA initialization only.
+        # TrainingWorkflow will call set_random_seed() again with the config seed
+        # before trainer creation, which will be the actual seed used for training.
+        # This early initialization prevents THPGenerator errors during module creation.
+        try:
+            from utils.utils import set_random_seed
+            # This ensures CUDA's RNG is properly initialized before device detection
+            # This is especially important when enable_prediction=True
+            set_random_seed(_CUDA_INIT_SEED)
+        except ImportError as e:
+            # Fallback: minimal seed initialization if set_random_seed not available
+            # Log the issue but continue with fallback
+            import logging
+            _logger = logging.getLogger(__name__)
+            _logger.warning(f"Could not import set_random_seed, using fallback initialization: {e}")
+            
+            # IMPORTANT: torch.manual_seed() must be called BEFORE checking cuda availability
+            import random
+            random.seed(_CUDA_INIT_SEED)
+            np.random.seed(_CUDA_INIT_SEED)
+            # This seeds both CPU and CUDA (if available)
+            torch.manual_seed(_CUDA_INIT_SEED)
+            # Also explicitly seed CUDA to be safe
+            try:
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed_all(_CUDA_INIT_SEED)
+            except RuntimeError as cuda_err:
+                # Log CUDA initialization issues but continue
+                _logger.warning(f"CUDA seed initialization failed in fallback: {cuda_err}")
+        
         # ---------- logger ----------
         self.logger = logging.getLogger("DynamicHeteroTrainer")
         if not self.logger.handlers:
@@ -104,6 +142,7 @@ class DynamicHeteroTrainer:
         self.logger.setLevel(logging.INFO if debug else logging.WARNING)
 
         # ---------- device & config ----------
+        # Device detection is now safe after random seed initialization
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.hetero_data = hetero_data
         self.input_dims = input_dims or {}

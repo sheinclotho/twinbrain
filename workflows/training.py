@@ -160,11 +160,12 @@ class TrainingWorkflow:
         trainer = DynamicHeteroTrainer(
             hetero_data=hetero_graphs,
             hidden_dim=cfg.get('model.hidden_dim', 128),
-            num_epochs=cfg.get('training.finetune_epochs', 80),
+            num_epochs=1,  # Not used; actual epochs specified in each train() call per stage
             recon_weight=cfg.get('loss.recon_weight', 1.0),
             recon_norm_weight=cfg.get('loss.recon_norm_weight', 3.0),
             recon_corr_weight=cfg.get('loss.recon_corr_weight', 2.0),
             recon_feat_var_weight=cfg.get('loss.recon_feat_var_weight', 0.02),
+            temp_weight=cfg.get('loss.temp_weight', 2.0),  # Initial value; updated during fine-tuning
             feature_lr_mul=cfg.get('training.feature_lr_mul', 12.0),
             scale_lr_mul=cfg.get('training.scale_lr_mul', 10.0),
             warmup_epochs=cfg.get('training.warmup_epochs', 5),
@@ -225,7 +226,12 @@ class TrainingWorkflow:
     
     def train_subject(self, subject_dir: Path, atlas: BrainAtlas):
         """
-        Train model for a single subject.
+        Train model for a single subject with proper training stages.
+        
+        Training consists of three stages:
+        1. Warmup: Initialize model with frozen scale parameters
+        2. Main Training: Primary training with default loss weights
+        3. Fine-tuning: Refine with stronger temporal alignment
         
         Args:
             subject_dir: Subject directory path
@@ -250,30 +256,85 @@ class TrainingWorkflow:
         # Initial diagnostics
         self._run_diagnostics(trainer)
         
-        # Warmup training
+        # ============================================================
+        # Stage 1: Warmup - Initialize with frozen scale parameters
+        # ============================================================
         warmup_epochs = self.config.get('training.warmup_epochs', 5)
-        warmup_run_epochs = self.config.get('training.warmup_run_epochs', 15)
         
-        with log_stage(f"Warmup Training ({warmup_run_epochs} epochs)"):
-            trainer.train(num_epochs=warmup_run_epochs, verbose=True)
+        if warmup_epochs > 0:
+            # Optionally use lower learning rate for warmup
+            warmup_lr = self.config.get('training.warmup_learning_rate', None)
+            original_lr = None
+            if warmup_lr is not None:
+                original_lr = trainer.optimizer.param_groups[0]['lr']
+                for param_group in trainer.optimizer.param_groups:
+                    param_group['lr'] = warmup_lr
+                logger.info(f"Warmup: Using reduced learning rate {warmup_lr}")
+            
+            with log_stage(f"Warmup Stage ({warmup_epochs} epochs, scale frozen)"):
+                trainer.train(num_epochs=warmup_epochs, verbose=True)
+            
+            # Restore original learning rate if it was changed
+            if original_lr is not None:
+                for param_group in trainer.optimizer.param_groups:
+                    param_group['lr'] = original_lr
+                logger.info(f"Warmup complete: Restored learning rate to {original_lr}")
+        else:
+            logger.info("Warmup stage skipped (warmup_epochs=0)")
         
-        # Cross-correlation analysis
-        try:
-            xcorr_res = compute_xcorr_best_lag(trainer, nt="fmri", node_idx=0, feat_idx=0)
-            logger.info(f"Cross-correlation result: {xcorr_res}")
-        except Exception as e:
-            logger.warning(f"Cross-correlation analysis failed: {e}")
+        # ============================================================
+        # Stage 2: Main Training - Primary training phase
+        # ============================================================
+        # Support both new config format (main_epochs) and legacy format (warmup_run_epochs)
+        main_epochs = self.config.get('training.main_epochs', None)
+        if main_epochs is None:
+            # Legacy support: warmup_run_epochs was the total for "warmup" phase
+            # We've already done warmup_epochs, so subtract it
+            legacy_warmup_run = self.config.get('training.warmup_run_epochs', None)
+            if legacy_warmup_run is not None:
+                main_epochs = max(0, legacy_warmup_run - warmup_epochs)
+                logger.info(f"Using legacy config: main_epochs={main_epochs} (warmup_run_epochs - warmup_epochs)")
+            else:
+                main_epochs = 60  # Default
         
-        # Fine-tuning
-        temp_weight = self.config.get('loss.temp_weight', 5.0)
-        trainer.temp_weight = temp_weight
+        if main_epochs > 0:
+            with log_stage(f"Main Training Stage ({main_epochs} epochs)"):
+                trainer.train(num_epochs=main_epochs, verbose=True)
+            
+            # Cross-correlation analysis after main training
+            try:
+                xcorr_res = compute_xcorr_best_lag(trainer, nt="fmri", node_idx=0, feat_idx=0)
+                logger.info(f"Cross-correlation result: {xcorr_res}")
+            except Exception as e:
+                logger.warning(f"Cross-correlation analysis failed: {e}")
+        else:
+            logger.info("Main training stage skipped (main_epochs=0)")
         
-        finetune_epochs = self.config.get('training.finetune_epochs', 80)
+        # ============================================================
+        # Stage 3: Fine-tuning - Refine with stronger temporal weight
+        # ============================================================
+        finetune_epochs = self.config.get('training.finetune_epochs', 30)
         
-        with log_stage(f"Fine-tuning ({finetune_epochs} epochs, temp_weight={temp_weight})"):
-            trainer.train(num_epochs=finetune_epochs, verbose=True)
+        if finetune_epochs > 0:
+            # Increase temporal weight for fine-tuning
+            finetune_temp_weight = self.config.get('training.finetune_temp_weight', None)
+            if finetune_temp_weight is None:
+                # Fallback to loss.temp_weight for backward compatibility
+                finetune_temp_weight = self.config.get('loss.temp_weight', 5.0)
+            
+            original_temp_weight = trainer.temp_weight
+            trainer.temp_weight = finetune_temp_weight
+            
+            logger.info(f"Fine-tuning: Increased temp_weight from {original_temp_weight} to {finetune_temp_weight}")
+            
+            with log_stage(f"Fine-tuning Stage ({finetune_epochs} epochs, temp_weight={finetune_temp_weight})"):
+                trainer.train(num_epochs=finetune_epochs, verbose=True)
+        else:
+            logger.info("Fine-tuning stage skipped (finetune_epochs=0)")
         
-        # Save model
+        # ============================================================
+        # Save final model
+        # ============================================================
         if self.config.get('output.save_final_model', True):
             model_path = paths["hetero_model"]
             try:

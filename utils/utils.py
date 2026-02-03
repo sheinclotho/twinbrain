@@ -30,6 +30,9 @@ def set_random_seed(seed: int = 42, deterministic: bool = True):
     This function initializes all random number generators before any
     CUDA operations to prevent THPGenerator_initDefaultGenerator errors.
     
+    CRITICAL: This function must be called BEFORE any CUDA operations,
+    including torch.cuda.is_available() or torch.device() creation.
+    
     Args:
         seed: Random seed value (default: 42)
         deterministic: If True, ensures deterministic behavior on CUDA.
@@ -42,10 +45,12 @@ def set_random_seed(seed: int = 42, deterministic: bool = True):
     # NumPy random
     np.random.seed(seed)
     
-    # PyTorch CPU random
+    # PyTorch CPU random - MUST be called before any CUDA operations
+    # This initializes the default RNG which is used by CUDA
     torch.manual_seed(seed)
     
     # PyTorch CUDA random (if available)
+    # torch.manual_seed() above already seeds CUDA, but we call these for completeness
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)  # For multi-GPU setups
