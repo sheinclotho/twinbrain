@@ -38,7 +38,13 @@ def diagnostics_plot_all(trainer, nt='fmri', node_idx=0, feat_idx=0, save_dir=No
     with torch.no_grad():
         enc_out = trainer.graph_encoder(data)
         x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict = enc_out
-        outputs = trainer.model(data, edge_index_dict=edge_index_dict)
+        outputs = trainer.model(
+            data=data,
+            edge_index_dict=edge_index_dict,
+            encoded_dict=x_dict,
+            num_nodes_dict=num_nodes_dict,
+            stats_dict=stats_dict,
+        )
         if len(outputs) >= 7:
             z_dict, gru_seq_dict, proj_seq_dict, recon_seq_dict, recon_seq_scaled, global_seq, recon_feature_dict = outputs[:7]
         else:
@@ -202,7 +208,13 @@ def run_forward_diagnostics(trainer,
     # forward model
     try:
         with torch.no_grad():
-            outputs = trainer.model(data, edge_index_dict=edge_index_dict)
+            outputs = trainer.model(
+                data=data,
+                edge_index_dict=edge_index_dict,
+                encoded_dict=x_dict,
+                num_nodes_dict=num_nodes_dict,
+                stats_dict=stats_dict,
+            )
     except Exception as e:
         logger.exception(f"[diagnostics] model forward failed: {e}")
         trainer.model.train()
