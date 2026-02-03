@@ -33,7 +33,13 @@ def compute_xcorr_best_lag(trainer, nt="fmri", node_idx=0, feat_idx=0):
 
     with torch.no_grad():
         try:
-            outputs = trainer.model(data, edge_index_dict=edge_index_dict)
+            outputs = trainer.model(
+                data=data,
+                edge_index_dict=edge_index_dict,
+                encoded_dict=x_dict,
+                num_nodes_dict=num_nodes_dict,
+                stats_dict=stats_dict,
+            )
         except Exception as e:
             print("[XCORR] model forward failed:", e)
             return {"error": "model_forward_failed", "exc": str(e)}

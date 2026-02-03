@@ -28,10 +28,11 @@ from utils.function import (
 
 # Optional diagnostic imports
 try:
-    from utils.debug import run_forward_diagnostics, diagnostics_plot_all, run_decoder_only_warmup
+    from utils.diagnostics import run_comprehensive_diagnostics
+    # Keep legacy imports for backward compatibility
+    from utils.debug import run_decoder_only_warmup
 except ImportError:
-    run_forward_diagnostics = None
-    diagnostics_plot_all = None
+    run_comprehensive_diagnostics = None
     run_decoder_only_warmup = None
 
 logger = get_logger(__name__)
@@ -185,28 +186,35 @@ class TrainingWorkflow:
         return trainer
     
     def _run_diagnostics(self, trainer: DynamicHeteroTrainer):
-        """Run diagnostic checks if available."""
+        """Run comprehensive diagnostic checks."""
         if not self.config.get('diagnostics.enabled', True):
             return
         
         logger.info("Running diagnostics")
         
-        try:
-            if run_forward_diagnostics is not None:
-                diag_out = run_forward_diagnostics(trainer, do_autoscale=False)
-                logger.info(f"Diagnostics summary: {list(diag_out.get('summary', {}).keys())}")
-        except Exception as e:
-            logger.warning(f"Forward diagnostics failed: {e}")
+        # Maximum nodes to analyze for diagnostics
+        MAX_DIAGNOSTIC_NODES = 3
         
         try:
-            if diagnostics_plot_all is not None and self.config.get('diagnostics.save_plots', True):
-                diagnostics_plot_all(trainer, nt='fmri', node_idx=0, feat_idx=0, 
-                                   save_dir=trainer.diagnostic_dir)
-                diagnostics_plot_all(trainer, nt='eeg', node_idx=0, feat_idx=0,
-                                   save_dir=trainer.diagnostic_dir)
-                logger.info(f"Diagnostic plots saved to {trainer.diagnostic_dir}")
+            if run_comprehensive_diagnostics is not None:
+                save_plots = self.config.get('diagnostics.save_plots', True)
+                plot_nodes = self.config.get('diagnostics.plot_nodes', [0, 1, 2])[:MAX_DIAGNOSTIC_NODES]
+                
+                diag_result = run_comprehensive_diagnostics(
+                    trainer,
+                    save_dir=trainer.diagnostic_dir,
+                    save_plots=save_plots,
+                    plot_nodes=plot_nodes,
+                )
+                
+                if "error" not in diag_result:
+                    logger.info(f"Diagnostics completed for modalities: {list(diag_result.get('modalities', {}).keys())}")
+                    if "summary_file" in diag_result:
+                        logger.info(f"Diagnostic summary saved to {diag_result['summary_file']}")
+                else:
+                    logger.warning(f"Diagnostics failed: {diag_result.get('error', 'unknown')}")
         except Exception as e:
-            logger.warning(f"Diagnostic plots failed: {e}")
+            logger.warning(f"Diagnostics failed: {e}")
     
     def train_subject(self, subject_dir: Path, atlas: BrainAtlas):
         """
