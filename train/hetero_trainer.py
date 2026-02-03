@@ -97,20 +97,27 @@ class DynamicHeteroTrainer:
     ):
         # ---------- Early random seed initialization ----------
         # CRITICAL: Must initialize random seeds BEFORE any CUDA operations
-        # to prevent THPGenerator_initDefaultGenerator errors
+        # to prevent THPGenerator_initDefaultGenerator errors when prediction is enabled
         try:
             from utils.utils import set_random_seed
             # Use a default seed if not already initialized
             # This ensures CUDA's RNG is properly initialized before device detection
+            # This is especially important when enable_prediction=True
             set_random_seed(42)
         except Exception:
             # Fallback: minimal seed initialization
+            # IMPORTANT: torch.manual_seed() must be called BEFORE checking cuda availability
             import random
             random.seed(42)
             np.random.seed(42)
+            # This seeds both CPU and CUDA (if available)
             torch.manual_seed(42)
-            if torch.cuda.is_available():
-                torch.cuda.manual_seed_all(42)
+            # Also explicitly seed CUDA to be safe
+            try:
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed_all(42)
+            except Exception:
+                pass  # Ignore errors in fallback
         
         # ---------- logger ----------
         self.logger = logging.getLogger("DynamicHeteroTrainer")
