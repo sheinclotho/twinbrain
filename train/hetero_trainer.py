@@ -115,7 +115,6 @@ class DynamicHeteroTrainer:
         except ImportError as e:
             # Fallback: minimal seed initialization if set_random_seed not available
             # Log the issue but continue with fallback
-            import logging
             _logger = logging.getLogger(__name__)
             _logger.warning(f"Could not import set_random_seed, using fallback initialization: {e}")
             
