@@ -97,10 +97,7 @@ class DynamicHeteroTrainer:
         self.logger.setLevel(logging.INFO if debug else logging.WARNING)
 
         # ---------- device & config ----------
-        if device is None:
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        else:
-            self.device = device
+        self.device = device if device is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.hetero_data = hetero_data
         self.input_dims = input_dims or {}
         self.hidden_dim = int(hidden_dim)
