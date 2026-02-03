@@ -98,26 +98,34 @@ class DynamicHeteroTrainer:
         # ---------- Early random seed initialization ----------
         # CRITICAL: Must initialize random seeds BEFORE any CUDA operations
         # to prevent THPGenerator_initDefaultGenerator errors when prediction is enabled
+        # We use a default seed here just for initialization safety.
+        # The actual seed from config is set by TrainingWorkflow before trainer creation.
+        _init_seed = 42  # Default seed for initialization
         try:
             from utils.utils import set_random_seed
-            # Use a default seed if not already initialized
             # This ensures CUDA's RNG is properly initialized before device detection
             # This is especially important when enable_prediction=True
-            set_random_seed(42)
-        except Exception:
-            # Fallback: minimal seed initialization
+            set_random_seed(_init_seed)
+        except (ImportError, AttributeError) as e:
+            # Fallback: minimal seed initialization if import fails
+            # Log the issue but continue with fallback
+            import logging
+            _temp_logger = logging.getLogger("DynamicHeteroTrainer.init")
+            _temp_logger.warning(f"Failed to import set_random_seed, using fallback initialization: {e}")
+            
             # IMPORTANT: torch.manual_seed() must be called BEFORE checking cuda availability
             import random
-            random.seed(42)
-            np.random.seed(42)
+            random.seed(_init_seed)
+            np.random.seed(_init_seed)
             # This seeds both CPU and CUDA (if available)
-            torch.manual_seed(42)
+            torch.manual_seed(_init_seed)
             # Also explicitly seed CUDA to be safe
             try:
                 if torch.cuda.is_available():
-                    torch.cuda.manual_seed_all(42)
-            except Exception:
-                pass  # Ignore errors in fallback
+                    torch.cuda.manual_seed_all(_init_seed)
+            except RuntimeError as cuda_err:
+                # Log CUDA initialization issues but continue
+                _temp_logger.warning(f"CUDA seed initialization failed in fallback: {cuda_err}")
         
         # ---------- logger ----------
         self.logger = logging.getLogger("DynamicHeteroTrainer")
