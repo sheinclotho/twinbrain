@@ -160,11 +160,12 @@ class TrainingWorkflow:
         trainer = DynamicHeteroTrainer(
             hetero_data=hetero_graphs,
             hidden_dim=cfg.get('model.hidden_dim', 128),
-            num_epochs=cfg.get('training.finetune_epochs', 80),
+            num_epochs=100,  # Default; actual epochs specified in train() calls
             recon_weight=cfg.get('loss.recon_weight', 1.0),
             recon_norm_weight=cfg.get('loss.recon_norm_weight', 3.0),
             recon_corr_weight=cfg.get('loss.recon_corr_weight', 2.0),
             recon_feat_var_weight=cfg.get('loss.recon_feat_var_weight', 0.02),
+            temp_weight=cfg.get('loss.temp_weight', 2.0),  # Will be updated during fine-tuning
             feature_lr_mul=cfg.get('training.feature_lr_mul', 12.0),
             scale_lr_mul=cfg.get('training.scale_lr_mul', 10.0),
             warmup_epochs=cfg.get('training.warmup_epochs', 5),
