@@ -1,0 +1,120 @@
+# TwinBrain V2 Configuration with Cross-Modal Bidirectional Prediction
+# This configuration extends default.yaml with cross-modal prediction features
+
+version: "v2"
+description: "V2 configuration with cross-modal bidirectional prediction (fMRI <-> EEG)"
+
+# Training parameters
+training:
+  warmup_epochs: 5
+  warmup_run_epochs: 15
+  finetune_epochs: 80
+  batch_size: 1
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  gradient_accumulation_steps: 1
+  
+  # Learning rate multipliers
+  feature_lr_mul: 12.0
+  scale_lr_mul: 10.0
+  
+  # Scheduler
+  scheduler:
+    type: "StepLR"
+    step_size: 30
+    gamma: 0.7
+
+# Model architecture
+model:
+  hidden_dim: 128
+  num_layers: 2
+  decoder_layers: 3
+  dropout: 0.1
+  
+  # Encoder settings
+  encoder:
+    use_batch_norm: true
+    activation: "relu"
+  
+  # Decoder settings
+  decoder:
+    use_residual: true
+    activation: "relu"
+
+# Loss function weights
+loss:
+  recon_weight: 1.0
+  recon_norm_weight: 3.0
+  recon_corr_weight: 2.0
+  recon_feat_var_weight: 0.02
+  temp_weight: 5.0
+
+# Single-modality prediction settings
+prediction:
+  enabled: true  # Enable multi-step future prediction
+  context_length: 50  # Number of historical steps to use as context
+  steps: 10  # Number of future steps to predict
+  weight: 0.1  # Weight for prediction loss
+
+# Cross-modal bidirectional prediction settings (NEW in V2)
+cross_modal_prediction:
+  enabled: true  # Enable cross-modal prediction (fMRI <-> EEG)
+  weight: 0.1  # Weight for cross-modal prediction loss
+  context_length: 50  # Number of historical steps from source modality
+  steps: 10  # Number of future steps to predict in target modality
+  direction: "both"  # Options: 'fmri_to_eeg', 'eeg_to_fmri', 'both'
+  
+  # Architecture settings
+  use_bridge: true  # Use bridge networks for modality translation
+  share_attention: false  # Share attention weights between directions
+  num_layers: 3  # Number of GRU layers in cross-modal predictor
+  num_heads: 8  # Number of attention heads
+  
+  # Training strategy
+  # Note: Cross-modal prediction learns to predict EEG activity from fMRI features
+  # and vice versa, enabling bidirectional understanding of cross-modal dynamics
+  
+# Auto-alignment settings
+alignment:
+  auto_align: true
+  auto_align_max_lag: 150
+  
+# Data processing
+data:
+  use_cache: true
+  cache_dir: "cache"
+  
+  # Atlas settings
+  atlas:
+    name: "Schaefer200"
+    n_parcels: 200
+    networks: 7
+
+# Diagnostics and logging
+diagnostics:
+  enabled: true
+  save_plots: true
+  diagnostic_dir: "diagnostics"
+  plot_nodes: [0, 1, 2]
+
+# Metrics tracking
+metrics:
+  enabled: true
+  output_dir: "metrics"
+  
+# Output settings
+output:
+  save_checkpoints: true
+  checkpoint_interval: 20
+  save_final_model: true
+  results_dir: "results"
+
+# Notes on V2 features:
+# ----------------------
+# 1. Cross-modal prediction enables the model to learn bidirectional relationships
+#    between fMRI and EEG during training
+# 2. This is different from alignment - it actually predicts future states of one
+#    modality from the other modality's features
+# 3. Use 'direction: both' for full bidirectional training (recommended)
+# 4. The bridge networks help translate between modality-specific representations
+# 5. Start with cross_modal weight = 0.1 and adjust based on loss balance
