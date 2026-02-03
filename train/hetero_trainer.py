@@ -95,6 +95,23 @@ class DynamicHeteroTrainer:
         metrics_output_dir: Optional[str] = None,
         gradient_accumulation_steps: int = 1,  # NEW: Gradient accumulation
     ):
+        # ---------- Early random seed initialization ----------
+        # CRITICAL: Must initialize random seeds BEFORE any CUDA operations
+        # to prevent THPGenerator_initDefaultGenerator errors
+        try:
+            from utils.utils import set_random_seed
+            # Use a default seed if not already initialized
+            # This ensures CUDA's RNG is properly initialized before device detection
+            set_random_seed(42)
+        except Exception:
+            # Fallback: minimal seed initialization
+            import random
+            random.seed(42)
+            np.random.seed(42)
+            torch.manual_seed(42)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(42)
+        
         # ---------- logger ----------
         self.logger = logging.getLogger("DynamicHeteroTrainer")
         if not self.logger.handlers:
@@ -104,6 +121,7 @@ class DynamicHeteroTrainer:
         self.logger.setLevel(logging.INFO if debug else logging.WARNING)
 
         # ---------- device & config ----------
+        # Device detection is now safe after random seed initialization
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.hetero_data = hetero_data
         self.input_dims = input_dims or {}
