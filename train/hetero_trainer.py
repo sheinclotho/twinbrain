@@ -4,17 +4,28 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple, Union, Callable
 
 import numpy as np
+import random
+
+# ============================================================================
+# CRITICAL: Initialize random seeds BEFORE importing torch modules
+# This prevents THPGenerator_initDefaultGenerator errors during CUDA operations
+# ============================================================================
+_CUDA_INIT_SEED = 42
+random.seed(_CUDA_INIT_SEED)
+np.random.seed(_CUDA_INIT_SEED)
+
+# Now import torch - but seed it immediately BEFORE any CUDA operations
 import torch
+# MUST call manual_seed BEFORE any cuda operations
+torch.manual_seed(_CUDA_INIT_SEED)
+
+# Now safe to import other torch modules
 import torch.nn as nn
 import torch.nn.functional as F_nn
 from torch_geometric.data import HeteroData
 
 from train.dynamic_hetero_gnn import DynamicHeteroGNN
 from train.coder import GraphEncoder
-
-# CUDA initialization seed: used for safe PyTorch module creation before config seed is applied
-# This prevents THPGenerator_initDefaultGenerator errors when prediction is enabled
-_CUDA_INIT_SEED = 42
 
 # Aligners may be LatentAligner or TemporalCrossAligner depending on availability
 try:

@@ -1,5 +1,16 @@
 # 放到 train/loss_helpers.py（新文件或并入现有 trainer 模块）
+import random
+import numpy as np
+
+# Initialize random seeds before torch import to prevent THPGenerator errors
+_INIT_SEED = 42
+random.seed(_INIT_SEED)
+np.random.seed(_INIT_SEED)
+
 import torch
+# MUST call manual_seed immediately after torch import
+torch.manual_seed(_INIT_SEED)
+
 import torch.nn.functional as F
 
 def lowpass_mse_loss(recon_norm: torch.Tensor, target_norm: torch.Tensor, kernel_size: int = 11) -> torch.Tensor:
