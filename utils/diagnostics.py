@@ -135,9 +135,9 @@ def run_comprehensive_diagnostics(
                     signal_pow, noise_pow = np.mean(t**2), np.mean((r - t)**2)
                     snr_values.append(10 * np.log10(signal_pow / (noise_pow + 1e-10)) if signal_pow > 0 else float('-inf'))
                 else:
-                    pearson_corrs.extend([float('nan')])
-                    rmse_values.extend([float('nan')])
-                    snr_values.extend([float('nan')])
+                    pearson_corrs.append(float('nan'))
+                    rmse_values.append(float('nan'))
+                    snr_values.append(float('nan'))
             
             # Temporal alignment
             node_idx = min(plot_nodes[0], N - 1) if N > 0 else 0
@@ -155,6 +155,10 @@ def run_comprehensive_diagnostics(
             else:
                 best_lag, best_corr = 0, 0.0
             
+            # Compute SNR mean from finite values
+            finite_snr = [s for s in snr_values if not np.isinf(s)]
+            snr_mean = float(np.nanmean(finite_snr)) if finite_snr else float('nan')
+            
             # Store metrics
             modality_result = {
                 "metrics": {
@@ -162,7 +166,7 @@ def run_comprehensive_diagnostics(
                         "pearson_mean": float(np.nanmean(pearson_corrs)),
                         "pearson_std": float(np.nanstd(pearson_corrs)),
                         "rmse_mean": float(np.nanmean(rmse_values)),
-                        "snr_mean_db": float(np.nanmean([s for s in snr_values if not np.isinf(s)])) if any(not np.isinf(s) for s in snr_values) else float('nan'),
+                        "snr_mean_db": snr_mean,
                     },
                     "alignment": {"lag_frames": best_lag, "correlation": best_corr},
                     "statistics": {
@@ -220,9 +224,12 @@ def run_comprehensive_diagnostics(
         # === Save JSON summary ===
         json_path = os.path.join(save_dir, "diagnostics_summary.json")
         try:
-            json_data = {k: v for k, v in result.items() if k != "modalities" or k == "modalities"}
-            # Clean modalities for JSON
-            json_data["modalities"] = {nt: {"metrics": mod.get("metrics", {})} for nt, mod in result["modalities"].items()}
+            # Create clean JSON-serializable structure
+            json_data = {
+                "training_state": result["training_state"],
+                "model_info": result["model_info"],
+                "modalities": {nt: {"metrics": mod.get("metrics", {})} for nt, mod in result["modalities"].items()}
+            }
             with open(json_path, 'w') as f:
                 json.dump(json_data, f, indent=2)
             result["summary_file"] = json_path

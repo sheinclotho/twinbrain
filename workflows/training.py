@@ -192,10 +192,13 @@ class TrainingWorkflow:
         
         logger.info("Running diagnostics")
         
+        # Maximum nodes to analyze for diagnostics
+        MAX_DIAGNOSTIC_NODES = 3
+        
         try:
             if run_comprehensive_diagnostics is not None:
                 save_plots = self.config.get('diagnostics.save_plots', True)
-                plot_nodes = self.config.get('diagnostics.plot_nodes', [0, 1, 2])[:3]  # Limit to 3 nodes max
+                plot_nodes = self.config.get('diagnostics.plot_nodes', [0, 1, 2])[:MAX_DIAGNOSTIC_NODES]
                 
                 diag_result = run_comprehensive_diagnostics(
                     trainer,
