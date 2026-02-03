@@ -12,6 +12,7 @@ import logging
 from utils.config import Config
 from utils.logging_utils import log_stage, get_logger
 from utils.analysis import compute_xcorr_best_lag
+from utils.utils import set_random_seed
 from mapper.atlas_mapper import BrainAtlas
 from train.hetero_trainer import DynamicHeteroTrainer
 from utils.function import (
@@ -55,6 +56,12 @@ class TrainingWorkflow:
         
         if not self.subjects:
             raise ValueError(f"No subjects found in {self.base_dir}")
+        
+        # Initialize random seeds for reproducibility and CUDA safety
+        # This prevents THPGenerator_initDefaultGenerator errors
+        seed = self.config.get('random_seed', 42)
+        set_random_seed(seed)
+        logger.info(f"Random seed set to {seed} in TrainingWorkflow")
         
         logger.info(f"Found {len(self.subjects)} subjects in {self.base_dir}")
     

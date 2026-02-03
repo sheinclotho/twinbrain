@@ -4,6 +4,9 @@
 version: "export"
 description: "Export latent representations for Unity visualization"
 
+# Random seed for reproducibility
+random_seed: 42
+
 # Model loading
 model:
   checkpoint_path: null  # Will be set from command line or use latest

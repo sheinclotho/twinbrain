@@ -1,5 +1,6 @@
 import numpy as np
 import os
+import random
 import torch
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -20,6 +21,40 @@ import nibabel as nib
 from scipy.ndimage import center_of_mass, gaussian_filter1d
 plt.rcParams['font.family'] = 'Arial'  
 plt.rcParams['axes.unicode_minus'] = False   
+
+
+def set_random_seed(seed: int = 42, deterministic: bool = True):
+    """
+    Set random seeds for reproducibility and proper initialization.
+    
+    This function initializes all random number generators before any
+    CUDA operations to prevent THPGenerator_initDefaultGenerator errors.
+    
+    Args:
+        seed: Random seed value (default: 42)
+        deterministic: If True, ensures deterministic behavior on CUDA.
+                      May impact performance. Set to False for faster training
+                      with less reproducibility (default: True)
+    """
+    # Python random
+    random.seed(seed)
+    
+    # NumPy random
+    np.random.seed(seed)
+    
+    # PyTorch CPU random
+    torch.manual_seed(seed)
+    
+    # PyTorch CUDA random (if available)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)  # For multi-GPU setups
+        
+        # Ensure deterministic behavior (may impact performance)
+        if deterministic:
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+
 
 def add_gaussian_noise(features: np.ndarray, std: float = 0.1) -> np.ndarray:
     """
