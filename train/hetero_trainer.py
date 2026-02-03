@@ -110,38 +110,34 @@ class DynamicHeteroTrainer:
         metrics_output_dir: Optional[str] = None,
         gradient_accumulation_steps: int = 1,  # NEW: Gradient accumulation
     ):
-        # ---------- Early random seed initialization ----------
-        # CRITICAL: Must initialize random seeds BEFORE any CUDA operations
-        # to prevent THPGenerator_initDefaultGenerator errors when prediction is enabled.
+        # ---------- Early random seed initialization (runtime call) ----------
+        # NOTE: Module-level seed initialization has ALREADY occurred (lines 13-20)
+        # with _INIT_SEED=42 to prevent THPGenerator errors during module import.
+        # 
+        # This runtime call to set_random_seed() will:
+        # 1. Re-initialize with the same seed for consistency
+        # 2. Ensure deterministic behavior is properly configured
+        # 3. Apply any additional CUDA-specific settings (if deterministic=True)
         #
-        # NOTE: This uses _INIT_SEED for safe CUDA initialization only.
-        # TrainingWorkflow will call set_random_seed() again with the config seed
-        # before trainer creation, which will be the actual seed used for training.
-        # This early initialization prevents THPGenerator errors during module creation.
+        # TrainingWorkflow may call set_random_seed() again with config.random_seed
+        # before creating the trainer, which will be the actual seed for training.
         try:
             from utils.utils import set_random_seed
-            # This ensures CUDA's RNG is properly initialized before device detection
-            # This is especially important when enable_prediction=True
+            # Re-initialize with same seed to ensure proper CUDA configuration
             set_random_seed(_INIT_SEED)
         except ImportError as e:
-            # Fallback: minimal seed initialization if set_random_seed not available
-            # Log the issue but continue with fallback
+            # Fallback: Module-level initialization has already occurred,
+            # so this is just for additional CUDA configuration if needed
             _logger = logging.getLogger(__name__)
-            _logger.warning(f"Could not import set_random_seed, using fallback initialization: {e}")
+            _logger.warning(f"Could not import set_random_seed, using module-level initialization: {e}")
             
-            # IMPORTANT: torch.manual_seed() must be called BEFORE checking cuda availability
-            import random
-            random.seed(_INIT_SEED)
-            np.random.seed(_INIT_SEED)
-            # This seeds both CPU and CUDA (if available)
-            torch.manual_seed(_INIT_SEED)
-            # Also explicitly seed CUDA to be safe
+            # Try to configure CUDA explicitly if available
             try:
                 if torch.cuda.is_available():
                     torch.cuda.manual_seed_all(_INIT_SEED)
             except RuntimeError as cuda_err:
                 # Log CUDA initialization issues but continue
-                _logger.warning(f"CUDA seed initialization failed in fallback: {cuda_err}")
+                _logger.warning(f"CUDA seed initialization failed: {cuda_err}")
         
         # ---------- logger ----------
         self.logger = logging.getLogger("DynamicHeteroTrainer")
