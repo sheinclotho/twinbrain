@@ -34,8 +34,6 @@ except ImportError:
     diagnostics_plot_all = None
     run_decoder_only_warmup = None
 
-from utils.utils import plot_recon_vs_target
-
 logger = get_logger(__name__)
 
 
