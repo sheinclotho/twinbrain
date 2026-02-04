@@ -192,6 +192,24 @@ class TrainingWorkflow:
             gradient_accumulation_steps=cfg.get('training.gradient_accumulation_steps', 1),
             # New: CUDA cache clearing frequency
             clear_cache_frequency=cfg.get('training.clear_cache_frequency', 1),
+            # New: dynamic variability weighting
+            enable_dynamic_weighting=cfg.get('dynamic_weighting.enabled', False),
+            dynamic_weighting_config={
+                'eeg_window_size': cfg.get('dynamic_weighting.eeg_window_size', 50),
+                'fmri_window_size': cfg.get('dynamic_weighting.fmri_window_size', 150),
+                'min_weight': cfg.get('dynamic_weighting.min_weight', 0.01),
+                'warmup_epochs': cfg.get('training.warmup_epochs', 5),
+                'main_epochs': cfg.get('training.main_epochs', 60),
+                'finetune_epochs': cfg.get('training.finetune_epochs', 30),
+                'warmup_temp': cfg.get('dynamic_weighting.warmup_temp', 0.1),
+                'main_temp_start': cfg.get('dynamic_weighting.main_temp_start', 0.1),
+                'main_temp_end': cfg.get('dynamic_weighting.main_temp_end', 1.0),
+                'finetune_temp': cfg.get('dynamic_weighting.finetune_temp', 2.0),
+                'disable_in_finetune': cfg.get('dynamic_weighting.disable_in_finetune', False),
+                'eeg_use_first_order_diff': cfg.get('dynamic_weighting.eeg_use_first_order_diff', True),
+                'eeg_use_covariance': cfg.get('dynamic_weighting.eeg_use_covariance', False),
+                'fmri_use_fc_change': cfg.get('dynamic_weighting.fmri_use_fc_change', True),
+            } if cfg.get('dynamic_weighting.enabled', False) else None,
             # Note: device is automatically detected in DynamicHeteroTrainer.__init__
         )
         

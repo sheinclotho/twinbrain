@@ -55,6 +55,12 @@ except Exception:
     def lowpass_mse_loss(a, b, kernel_size=11):
         return torch.tensor(0.0, device=(a.device if a is not None else "cpu"))
 
+# Dynamic variability weighting (optional)
+try:
+    from train.variability_weighting import DynamicVariabilityWeighting
+except Exception:
+    DynamicVariabilityWeighting = None
+
 
 class DynamicHeteroTrainer:
     """
@@ -116,6 +122,9 @@ class DynamicHeteroTrainer:
         metrics_output_dir: Optional[str] = None,
         gradient_accumulation_steps: int = 1,  # NEW: Gradient accumulation
         clear_cache_frequency: int = 1,  # NEW: Clear CUDA cache every N batches (1=every batch)
+        # NEW: Dynamic variability weighting parameters
+        enable_dynamic_weighting: bool = False,
+        dynamic_weighting_config: Optional[Dict] = None,
     ):
         # ---------- Early random seed initialization (runtime call) ----------
         # NOTE: Module-level seed initialization has ALREADY occurred (lines 13-20)
@@ -234,6 +243,33 @@ class DynamicHeteroTrainer:
                 self.enable_metrics_tracking = False
         else:
             self.metrics_tracker = None
+
+        # New: dynamic variability weighting
+        self.enable_dynamic_weighting = bool(enable_dynamic_weighting)
+        self.dynamic_weighting = None
+        self.modality_weights = {}  # Cache for per-modality weights
+        
+        if self.enable_dynamic_weighting and DynamicVariabilityWeighting is not None:
+            try:
+                # Create config with training stage parameters
+                if dynamic_weighting_config is None:
+                    dynamic_weighting_config = {}
+                
+                # Merge with warmup_epochs if not explicitly set
+                if 'warmup_epochs' not in dynamic_weighting_config:
+                    dynamic_weighting_config['warmup_epochs'] = self.warmup_epochs
+                
+                self.dynamic_weighting = DynamicVariabilityWeighting(**dynamic_weighting_config)
+                self.logger.info("Dynamic variability weighting enabled")
+                self.logger.info(f"  - Warmup: {dynamic_weighting_config.get('warmup_epochs', self.warmup_epochs)} epochs")
+                self.logger.info(f"  - Main: {dynamic_weighting_config.get('main_epochs', 60)} epochs")
+                self.logger.info(f"  - Finetune: {dynamic_weighting_config.get('finetune_epochs', 30)} epochs")
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize dynamic weighting: {e}")
+                self.enable_dynamic_weighting = False
+        elif self.enable_dynamic_weighting:
+            self.logger.warning("Dynamic weighting requested but DynamicVariabilityWeighting not available")
+            self.enable_dynamic_weighting = False
 
         # optional logger config helper
         try:
@@ -734,6 +770,33 @@ class DynamicHeteroTrainer:
                             raise ValueError(f"z_dict['{nt}'] after processing must be (N,H), got {tuple(z.shape)}")
                         sanitized_z[nt] = z
 
+                # NEW: Compute dynamic variability weights for each modality
+                # Note: Weights are computed once per epoch at the first batch
+                if self.enable_dynamic_weighting and self.dynamic_weighting is not None:
+                    # Compute weights for each modality based on current data
+                    for nt in self.metadata[0]:
+                        # Use raw input data for variability computation
+                        x_seq = getattr(data[nt], "x_seq", None)
+                        if x_seq is not None and isinstance(x_seq, torch.Tensor):
+                            try:
+                                weights = self.dynamic_weighting.compute_modality_weights(
+                                    x=x_seq,
+                                    modality=nt,
+                                    epoch=epoch,
+                                    force_update=(data_idx == 0)  # Update at start of each epoch
+                                )
+                                self.modality_weights[nt] = weights
+                            except Exception as e:
+                                self.logger.warning(f"Failed to compute weights for {nt}: {e}")
+                                # Fallback to uniform weights
+                                self.modality_weights[nt] = self._uniform_weights(x_seq)
+                else:
+                    # If disabled, use uniform weights
+                    for nt in self.metadata[0]:
+                        x_seq = getattr(data[nt], "x_seq", None)
+                        if x_seq is not None and isinstance(x_seq, torch.Tensor):
+                            self.modality_weights[nt] = self._uniform_weights(x_seq)
+
                 # 4) align loss
                 a_z_f = sanitized_z.get("fmri", None)
                 a_z_e = sanitized_z.get("eeg", None)
@@ -949,7 +1012,18 @@ class DynamicHeteroTrainer:
                         raise ValueError(f"No overlap between recon and target for '{nt}'")
                     r_crop = recon[:mN, :mT, :mF]
                     t_crop = target_res[:mN, :mT, :mF]
-                    l_nt = F_nn.mse_loss(r_crop, t_crop)
+                    
+                    # NEW: Apply dynamic weights if available
+                    if nt in self.modality_weights:
+                        weights = self.modality_weights[nt][:mF]  # Match feature dimension
+                        # Compute per-feature MSE
+                        per_feature_loss = ((r_crop - t_crop) ** 2).mean(dim=(0, 1))  # [F]
+                        # Weight and sum
+                        l_nt = (per_feature_loss * weights).sum()
+                    else:
+                        # Standard MSE loss
+                        l_nt = F_nn.mse_loss(r_crop, t_crop)
+                    
                     recon_losses_per_nt[nt] = float(l_nt.detach().cpu())
                     recon_loss = recon_loss + l_nt
 
@@ -977,7 +1051,17 @@ class DynamicHeteroTrainer:
                         mean_expand = stats["mean"].expand(-1, recon_feat.shape[1], -1)[:mN, :mT, :mF]
                         std_expand = stats["std"].expand(-1, recon_feat.shape[1], -1)[:mN, :mT, :mF]
                         tnorm = (target_res[:mN, :mT, :mF] - mean_expand) / (std_expand + 1e-8)
-                        recon_norm_loss = recon_norm_loss + F_nn.mse_loss(rf, tnorm)
+                        
+                        # NEW: Apply dynamic weights if available
+                        if nt in self.modality_weights:
+                            weights = self.modality_weights[nt][:mF]  # Match feature dimension
+                            # Compute per-feature MSE
+                            per_feature_loss = ((rf - tnorm) ** 2).mean(dim=(0, 1))  # [F]
+                            # Weight and sum
+                            recon_norm_loss = recon_norm_loss + (per_feature_loss * weights).sum()
+                        else:
+                            recon_norm_loss = recon_norm_loss + F_nn.mse_loss(rf, tnorm)
+                        
                         if self.spec_loss_weight > 0.0:
                             spec_loss_total = spec_loss_total + lowpass_mse_loss(
                                 rf, tnorm, kernel_size=self.spec_kernel_size
@@ -1234,6 +1318,25 @@ class DynamicHeteroTrainer:
                 
                 self.logger.info(log_msg)
                 self.logger.info(f"[Epoch {epoch}] relative_error={rel_error_epoch}")
+                
+                # NEW: Log dynamic weighting info
+                if self.enable_dynamic_weighting and self.dynamic_weighting is not None:
+                    stage_info = self.dynamic_weighting.get_stage_info(epoch)
+                    self.logger.info(
+                        f"[Epoch {epoch}] Dynamic Weighting: stage={stage_info['stage']}, "
+                        f"temperature={stage_info['temperature']:.3f}"
+                    )
+                    # Log weight statistics for each modality
+                    for nt, weights in self.modality_weights.items():
+                        if weights is not None and len(weights) > 0:
+                            w_min = weights.min().item()
+                            w_max = weights.max().item()
+                            w_mean = weights.mean().item()
+                            w_std = weights.std().item()
+                            self.logger.info(
+                                f"  {nt}: weight_range=[{w_min:.4f}, {w_max:.4f}], "
+                                f"mean={w_mean:.4f}, std={w_std:.4f}"
+                            )
 
         # Training completed - save metrics and print summary
         if self.metrics_tracker is not None:
@@ -1243,6 +1346,19 @@ class DynamicHeteroTrainer:
     # ----------------------------------------------------------------------
     # Scale freeze / unfreeze
     # ----------------------------------------------------------------------
+    def _uniform_weights(self, x_seq: torch.Tensor) -> torch.Tensor:
+        """
+        Create uniform weights for a tensor.
+        
+        Args:
+            x_seq: Input sequence tensor
+            
+        Returns:
+            Uniform weights [features]
+        """
+        num_features = x_seq.shape[-1] if x_seq.ndim >= 2 else 1
+        return torch.ones(num_features, device=self.device) / num_features
+    
     def _set_scale_requires_grad(self, flag: bool):
         """
         只对 scale/log_scale 参数的 requires_grad 做切换；

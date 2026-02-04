@@ -71,6 +71,37 @@ prediction:
   weight: 0.1  # Weight for prediction loss
   use_gradient_checkpointing: true  # Use gradient checkpointing to save memory (recommended)
   # Example: Use last 50 steps to predict next 10 steps
+
+# Dynamic Variability Weighting (NEW)
+# Implements learnability-based dynamic weighting to prevent EEG collapse and emphasize fMRI state transitions
+dynamic_weighting:
+  enabled: false  # Enable dynamic variability-based weighting
+  
+  # Variability computation parameters
+  eeg_window_size: 50  # Sliding window for EEG variability (fast time scale)
+  fmri_window_size: 150  # Sliding window for fMRI variability (slow time scale, 3x EEG)
+  
+  # Weight mapping parameters
+  min_weight: 0.01  # Minimum weight to prevent complete suppression of channels
+  
+  # Training stage scheduling (temperatures control weight sharpness)
+  # Note: warmup_epochs, main_epochs, finetune_epochs are taken from the
+  # training section above by default (lines 13, 17, 20)
+  warmup_temp: 0.1  # Small temperature = sharp focus on high-variability channels
+  main_temp_start: 0.1  # Starting temperature for main training
+  main_temp_end: 1.0  # Ending temperature for main training (gradual broadening)
+  finetune_temp: 2.0  # Large temperature = flat distribution to prevent overfitting
+  disable_in_finetune: false  # If true, use uniform weights in finetune stage
+  
+  # Modality-specific options
+  eeg_use_first_order_diff: true  # Use first-order difference energy for EEG
+  eeg_use_covariance: false  # Use channel covariance participation (expensive)
+  fmri_use_fc_change: true  # Use functional connectivity changes for fMRI
+  
+  # When enabled:
+  # - Warmup: Focus on high-variability channels (prevent collapse)
+  # - Main: Gradually include more channels as training progresses
+  # - Finetune: Broaden or disable to prevent overfitting to local patterns
   
 # Auto-alignment settings
 alignment:
