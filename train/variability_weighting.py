@@ -180,8 +180,9 @@ class VariabilityComputer:
         
         T, R = x.shape
         
-        # fMRI typically has longer time scale
-        window_size = min(self.window_size * 3, T)  # 3x longer window for fMRI
+        # fMRI typically has longer time scale (3x EEG by default)
+        # Note: This ratio can be adjusted if needed for specific datasets
+        window_size = min(self.window_size * 3, T)
         
         variabilities = []
         
@@ -224,6 +225,8 @@ class VariabilityComputer:
         # 3. Low-frequency power (using simple moving average as lowpass)
         if T >= window_size:
             # Apply moving average to get low-frequency component
+            # Note: kernel_size=11 and using 25% of sequence are heuristics
+            # that work well for typical fMRI data. Can be tuned if needed.
             kernel_size = min(11, T // 4)  # Use ~25% of sequence as kernel
             if kernel_size >= 3:
                 x_lowfreq = self._moving_average(x_residual, kernel_size)
@@ -294,7 +297,7 @@ class VariabilityWeightMapper:
     
     def __init__(
         self,
-        temperature: float = 1.0,
+        temperature: float = 1.0,  # Fallback temperature if not overridden by scheduler
         min_weight: float = 0.01,
         epsilon: float = 1e-8
     ):
@@ -302,7 +305,7 @@ class VariabilityWeightMapper:
         Initialize weight mapper.
         
         Args:
-            temperature: Temperature parameter for softmax
+            temperature: Default temperature parameter for softmax (typically overridden by scheduler)
             min_weight: Minimum weight to prevent complete suppression
             epsilon: Small constant for numerical stability
         """

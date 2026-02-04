@@ -771,6 +771,7 @@ class DynamicHeteroTrainer:
                         sanitized_z[nt] = z
 
                 # NEW: Compute dynamic variability weights for each modality
+                # Note: Weights are computed once per epoch at the first batch
                 if self.enable_dynamic_weighting and self.dynamic_weighting is not None:
                     # Compute weights for each modality based on current data
                     for nt in self.metadata[0]:
@@ -782,21 +783,19 @@ class DynamicHeteroTrainer:
                                     x=x_seq,
                                     modality=nt,
                                     epoch=epoch,
-                                    force_update=(data_idx == 0)  # Update once per epoch
+                                    force_update=(data_idx == 0)  # Update at start of each epoch
                                 )
                                 self.modality_weights[nt] = weights
                             except Exception as e:
                                 self.logger.warning(f"Failed to compute weights for {nt}: {e}")
                                 # Fallback to uniform weights
-                                num_features = x_seq.shape[-1] if x_seq.ndim >= 2 else 1
-                                self.modality_weights[nt] = torch.ones(num_features, device=self.device) / num_features
+                                self.modality_weights[nt] = self._uniform_weights(x_seq)
                 else:
                     # If disabled, use uniform weights
                     for nt in self.metadata[0]:
                         x_seq = getattr(data[nt], "x_seq", None)
                         if x_seq is not None and isinstance(x_seq, torch.Tensor):
-                            num_features = x_seq.shape[-1] if x_seq.ndim >= 2 else 1
-                            self.modality_weights[nt] = torch.ones(num_features, device=self.device) / num_features
+                            self.modality_weights[nt] = self._uniform_weights(x_seq)
 
                 # 4) align loss
                 a_z_f = sanitized_z.get("fmri", None)
@@ -1347,6 +1346,19 @@ class DynamicHeteroTrainer:
     # ----------------------------------------------------------------------
     # Scale freeze / unfreeze
     # ----------------------------------------------------------------------
+    def _uniform_weights(self, x_seq: torch.Tensor) -> torch.Tensor:
+        """
+        Create uniform weights for a tensor.
+        
+        Args:
+            x_seq: Input sequence tensor
+            
+        Returns:
+            Uniform weights [features]
+        """
+        num_features = x_seq.shape[-1] if x_seq.ndim >= 2 else 1
+        return torch.ones(num_features, device=self.device) / num_features
+    
     def _set_scale_requires_grad(self, flag: bool):
         """
         只对 scale/log_scale 参数的 requires_grad 做切换；

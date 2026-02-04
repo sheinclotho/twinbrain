@@ -85,7 +85,8 @@ dynamic_weighting:
   min_weight: 0.01  # Minimum weight to prevent complete suppression of channels
   
   # Training stage scheduling (temperatures control weight sharpness)
-  # warmup_epochs, main_epochs, finetune_epochs are taken from training section by default
+  # Note: warmup_epochs, main_epochs, finetune_epochs are taken from the
+  # training section above by default (lines 13, 17, 20)
   warmup_temp: 0.1  # Small temperature = sharp focus on high-variability channels
   main_temp_start: 0.1  # Starting temperature for main training
   main_temp_end: 1.0  # Ending temperature for main training (gradual broadening)
