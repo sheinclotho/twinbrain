@@ -1,7 +1,6 @@
 import os
 import time
 import logging
-import threading
 from typing import Any, Dict, List, Optional, Tuple, Union, Callable
 
 import numpy as np
@@ -49,67 +48,6 @@ try:
 except Exception:
     def lowpass_mse_loss(a, b, kernel_size=11):
         return torch.tensor(0.0, device=(a.device if a is not None else "cpu"))
-
-
-class TrainingHeartbeat:
-    """
-    Simple heartbeat monitor for detecting training stalls.
-    Logs periodic heartbeat messages to show training is making progress.
-    """
-    def __init__(self, logger: logging.Logger, interval: int = 30):
-        """
-        Args:
-            logger: Logger to use for heartbeat messages
-            interval: Heartbeat interval in seconds (default: 30)
-        """
-        self.logger = logger
-        self.interval = interval
-        self.last_heartbeat = time.time()
-        self.active = False
-        self.thread = None
-        self._stop_event = threading.Event()
-        
-    def start(self):
-        """Start the heartbeat monitor."""
-        self.active = True
-        self.last_heartbeat = time.time()
-        self._stop_event.clear()
-        self.thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
-        self.thread.start()
-        
-    def stop(self):
-        """Stop the heartbeat monitor."""
-        self.active = False
-        self._stop_event.set()
-        if self.thread is not None:
-            self.thread.join(timeout=2.0)
-            
-    def update(self, message: Optional[str] = None):
-        """
-        Update the heartbeat timestamp.
-        
-        Args:
-            message: Optional message to log immediately
-        """
-        self.last_heartbeat = time.time()
-        if message:
-            self.logger.info(f"[Heartbeat] {message}")
-    
-    def _heartbeat_loop(self):
-        """Background thread that monitors for stalls."""
-        while self.active and not self._stop_event.is_set():
-            self._stop_event.wait(self.interval)
-            if not self.active:
-                break
-            elapsed = time.time() - self.last_heartbeat
-            if elapsed > self.interval * 2:
-                self.logger.warning(
-                    f"[Heartbeat] No activity for {elapsed:.1f}s - possible stall detected!"
-                )
-            else:
-                self.logger.info(
-                    f"[Heartbeat] Training active (last activity {elapsed:.1f}s ago)"
-                )
 
 
 class DynamicHeteroTrainer:
@@ -300,7 +238,7 @@ class DynamicHeteroTrainer:
                 spatial_T=self.spatial_T,
                 hidden_dim=self.hidden_dim,
                 debug=self.debug,
-            )
+            ).to(self.device)
         except Exception as e:
             raise RuntimeError(f"[Init] Failed to construct GraphEncoder: {e}")
 
@@ -645,50 +583,6 @@ class DynamicHeteroTrainer:
         self.model.train()
         self.aligner.train()
         
-        # NEW: Validate training setup before starting
-        self.logger.info("=" * 80)
-        self.logger.info("Validating training setup...")
-        
-        # Check data_list is valid
-        if not hasattr(self, 'data_list') or not self.data_list:
-            raise RuntimeError("data_list is empty or not initialized. Cannot start training.")
-        self.logger.info(f"  ✓ Data list contains {len(self.data_list)} batches")
-        
-        # Check models are initialized
-        if self.model is None or self.graph_encoder is None:
-            raise RuntimeError("Model or GraphEncoder not initialized. Cannot start training.")
-        self.logger.info(f"  ✓ Model and GraphEncoder initialized")
-        
-        # Check device availability
-        if self.device.type == 'cuda':
-            if not torch.cuda.is_available():
-                raise RuntimeError("CUDA device specified but not available.")
-            self.logger.info(f"  ✓ Using CUDA device: {torch.cuda.get_device_name(0)}")
-            self.logger.info(f"  ✓ CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
-        else:
-            self.logger.info(f"  ✓ Using device: {self.device}")
-        
-        # NEW: Inspect first batch to validate data structure
-        try:
-            first_data = self.data_list[0]
-            self.logger.info(f"  ✓ First batch inspection:")
-            self.logger.info(f"    - Type: {type(first_data)}")
-            if hasattr(first_data, 'node_types'):
-                self.logger.info(f"    - Node types: {first_data.node_types}")
-            if hasattr(first_data, 'edge_types'):
-                self.logger.info(f"    - Edge types: {first_data.edge_types}")
-            # Check each node type
-            for nt in self.metadata[0]:
-                if hasattr(first_data, nt):
-                    node_data = getattr(first_data, nt)
-                    if hasattr(node_data, 'x_seq'):
-                        x_seq = node_data.x_seq
-                        self.logger.info(f"    - {nt}.x_seq shape: {tuple(x_seq.shape)}, dtype: {x_seq.dtype}")
-                    if hasattr(node_data, 'num_nodes'):
-                        self.logger.info(f"    - {nt}.num_nodes: {node_data.num_nodes}")
-        except Exception as e:
-            self.logger.warning(f"  ⚠ Could not inspect first batch: {e}")
-        
         # NEW: Log training configuration at start
         self.logger.info("=" * 80)
         self.logger.info(f"Starting Training: {epochs} epochs")
@@ -699,145 +593,98 @@ class DynamicHeteroTrainer:
         else:
             self.logger.info(f"  ✗ Prediction DISABLED")
         self.logger.info("=" * 80)
-        
-        # NEW: Start heartbeat monitor to detect stalls
-        heartbeat = TrainingHeartbeat(self.logger, interval=30)
-        heartbeat.start()
-        self.logger.info("✓ Heartbeat monitor started (will log every 30s)")
 
-        try:
-            # batch_rescale 默认配置防御
-            if "warmup_epochs" not in self.batch_rescale_cfg:
-                self.batch_rescale_cfg["warmup_epochs"] = 0
-            if not hasattr(self, "scale_only_epochs"):
-                self.scale_only_epochs = 0
-            if not hasattr(self, "scale_only_lr_mul"):
-                self.scale_only_lr_mul = 20.0
+        # batch_rescale 默认配置防御
+        if "warmup_epochs" not in self.batch_rescale_cfg:
+            self.batch_rescale_cfg["warmup_epochs"] = 0
+        if not hasattr(self, "scale_only_epochs"):
+            self.scale_only_epochs = 0
+        if not hasattr(self, "scale_only_lr_mul"):
+            self.scale_only_lr_mul = 20.0
 
-            monitor_nt = "fmri"
-            patience = getattr(self, "early_stop_patience", 5)
-            lr_shrink = float(getattr(self, "early_stop_lr_shrink", 0.5))
-            min_lr = float(getattr(self, "early_stop_min_lr", 1e-7))
+        monitor_nt = "fmri"
+        patience = getattr(self, "early_stop_patience", 5)
+        lr_shrink = float(getattr(self, "early_stop_lr_shrink", 0.5))
+        min_lr = float(getattr(self, "early_stop_min_lr", 1e-7))
 
-            # warmup: freeze scale
-            if self.warmup_epochs > 0 and self.freeze_scale_during_warmup:
-                self._set_scale_requires_grad(False)
-                self.logger.info(f"[Warmup] freezing scale params for {self.warmup_epochs} epochs")
+        # warmup: freeze scale
+        if self.warmup_epochs > 0 and self.freeze_scale_during_warmup:
+            self._set_scale_requires_grad(False)
+            self.logger.info(f"[Warmup] freezing scale params for {self.warmup_epochs} epochs")
 
-            best_rel = float("inf")
-            best_epoch = 0
-            no_improve = 0
-            best_model_state = None
-            best_opt_state = None
+        best_rel = float("inf")
+        best_epoch = 0
+        no_improve = 0
+        best_model_state = None
+        best_opt_state = None
 
-            # helper: model 输出校验
-            def _validate_model_outputs(outputs):
-                if not (isinstance(outputs, (list, tuple)) and len(outputs) == 8):
-                    raise RuntimeError(
-                        "model.forward must return 8-tuple "
-                        "(z_dict, gru_out, proj_seq_dict, recon_seq_denorm, recon_seq_scaled, "
-                        "global_seq, recon_feature_dict, recon_denorm_dict). "
-                        f"Got type={type(outputs)}, len={len(outputs) if isinstance(outputs,(list,tuple)) else 'N/A'}"
-                    )
-                return outputs
+        # helper: model 输出校验
+        def _validate_model_outputs(outputs):
+            if not (isinstance(outputs, (list, tuple)) and len(outputs) == 8):
+                raise RuntimeError(
+                    "model.forward must return 8-tuple "
+                    "(z_dict, gru_out, proj_seq_dict, recon_seq_denorm, recon_seq_scaled, "
+                    "global_seq, recon_feature_dict, recon_denorm_dict). "
+                    f"Got type={type(outputs)}, len={len(outputs) if isinstance(outputs,(list,tuple)) else 'N/A'}"
+                )
+            return outputs
 
-            for epoch in range(1, epochs + 1):
-                start = time.time()
-                total_loss = total_align = total_temp = total_recon = total_recon_norm = total_spec = 0.0
-                total_predictor = 0.0  # NEW: Track PredictorHead loss
-                batches = 0
+        for epoch in range(1, epochs + 1):
+            start = time.time()
+            total_loss = total_align = total_temp = total_recon = total_recon_norm = total_spec = 0.0
+            total_predictor = 0.0  # NEW: Track PredictorHead loss
+            batches = 0
+            
+            # Check for empty data_list to prevent silent hangs
+            if len(self.data_list) == 0:
+                raise RuntimeError(
+                    f"[Train] data_list is empty at epoch {epoch}. "
+                    "Training cannot proceed without data."
+                )
+
+            # warmup 结束后解冻 scale
+            if epoch == self.warmup_epochs + 1 and self.freeze_scale_during_warmup:
+                self._set_scale_requires_grad(True)
+                self.logger.info("[Warmup] unfreezing scale params, resuming full training")
+
+            # batch_rescale 的 warmup 结束后禁用
+            if self.batch_rescale_cfg.get("enable", False) and epoch > int(self.batch_rescale_cfg.get("warmup_epochs", 0)):
+                self.batch_rescale_cfg["enable"] = False
+                self.logger.info(
+                    f"[BatchRescale] warmup_epochs passed ({self.batch_rescale_cfg.get('warmup_epochs')}), disabling batch_rescale"
+                )
+
+            for data_idx, data in enumerate(self.data_list):
+                data = data.to(self.device)
                 
-                # Update heartbeat at epoch start
-                heartbeat.update(f"Starting epoch {epoch}/{epochs}")
+                # Zero gradients only at start of accumulation cycle
+                if data_idx % self.gradient_accumulation_steps == 0:
+                    self.optimizer.zero_grad(set_to_none=True)
 
-                # warmup 结束后解冻 scale
-                if epoch == self.warmup_epochs + 1 and self.freeze_scale_during_warmup:
-                    self._set_scale_requires_grad(True)
-                    self.logger.info("[Warmup] unfreezing scale params, resuming full training")
-
-                # batch_rescale 的 warmup 结束后禁用
-                if self.batch_rescale_cfg.get("enable", False) and epoch > int(self.batch_rescale_cfg.get("warmup_epochs", 0)):
-                    self.batch_rescale_cfg["enable"] = False
-                    self.logger.info(
-                        f"[BatchRescale] warmup_epochs passed ({self.batch_rescale_cfg.get('warmup_epochs')}), disabling batch_rescale"
+                # 1) GraphEncoder
+                enc_out = self.graph_encoder(data)
+                if not (isinstance(enc_out, (list, tuple)) and len(enc_out) >= 5):
+                    raise RuntimeError(
+                        "graph_encoder(data) must return at least 5-tuple "
+                        "(x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict, ...). "
+                        f"Received type={type(enc_out)}"
                     )
+                x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict = enc_out[:5]
 
-                for data_idx, data in enumerate(self.data_list):
-                    # Update heartbeat every batch
-                    if data_idx % 5 == 0:
-                        heartbeat.update()
-                        
-                    # Log progress every batch in first epoch, then every 10 batches
-                    if epoch == 1 or data_idx % 10 == 0:
-                        self.logger.info(f"[Epoch {epoch}/{epochs}] Processing batch {data_idx + 1}/{len(self.data_list)}...")
-                    
-                    try:
-                        # Move data to device with timeout protection
-                        data = data.to(self.device)
-                        
-                        # Ensure CUDA operations complete if using GPU
-                        if self.device.type == 'cuda':
-                            torch.cuda.synchronize()
-                    except RuntimeError as e:
-                        self.logger.error(f"Failed to move data to device: {e}")
-                        raise RuntimeError(f"Data transfer to {self.device} failed at epoch {epoch}, batch {data_idx}: {e}")
-                    
-                    # Zero gradients only at start of accumulation cycle
-                    if data_idx % self.gradient_accumulation_steps == 0:
-                        self.optimizer.zero_grad(set_to_none=True)
-
-                    # 1) GraphEncoder with error handling
-                    try:
-                        if data_idx == 0:
-                            self.logger.info(f"[Epoch {epoch}] Running GraphEncoder on batch {data_idx}...")
-                        enc_out = self.graph_encoder(data)
-                        
-                        # Ensure CUDA operations complete if using GPU
-                        if self.device.type == 'cuda':
-                            torch.cuda.synchronize()
-                            
-                        if data_idx == 0:
-                            self.logger.info(f"[Epoch {epoch}] GraphEncoder completed successfully")
-                    except Exception as e:
-                        self.logger.error(f"GraphEncoder failed at epoch {epoch}, batch {data_idx}: {e}")
-                        self.logger.error(f"Data type: {type(data)}, Device: {self.device}")
-                        raise RuntimeError(f"GraphEncoder forward pass failed: {e}")
-                    
-                    if not (isinstance(enc_out, (list, tuple)) and len(enc_out) >= 5):
-                        raise RuntimeError(
-                            "graph_encoder(data) must return at least 5-tuple "
-                            "(x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict, ...). "
-                            f"Received type={type(enc_out)}"
-                        )
-                    x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict = enc_out[:5]
-
-                    # 2) model forward with error handling
-                    try:
-                        if data_idx == 0:
-                            self.logger.info(f"[Epoch {epoch}] Running model forward pass...")
-                        outputs = self.model(
-                            data=data,
-                            edge_index_dict=edge_index_dict,
-                            encoded_dict=x_dict,
-                            num_nodes_dict=num_nodes_dict,
-                            stats_dict=stats_dict,
-                        )
-                        
-                        # Ensure CUDA operations complete if using GPU
-                        if self.device.type == 'cuda':
-                            torch.cuda.synchronize()
-                            
-                        if data_idx == 0:
-                            self.logger.info(f"[Epoch {epoch}] Model forward completed successfully")
-                    except Exception as e:
-                        self.logger.error(f"Model forward failed at epoch {epoch}, batch {data_idx}: {e}")
-                        raise RuntimeError(f"Model forward pass failed: {e}")
-                    (
-                        z_dict,
-                        gru_seq_dict,
-                        proj_seq_dict,
-                        recon_seq_dict,
-                        recon_seq_scaled,
+                # 2) model forward
+                outputs = self.model(
+                    data=data,
+                    edge_index_dict=edge_index_dict,
+                    encoded_dict=x_dict,
+                    num_nodes_dict=num_nodes_dict,
+                    stats_dict=stats_dict,
+                )
+                (
+                    z_dict,
+                    gru_seq_dict,
+                    proj_seq_dict,
+                    recon_seq_dict,
+                    recon_seq_scaled,
                     global_seq,
                     recon_feature_dict,
                     recon_denorm_dict,
@@ -870,18 +717,14 @@ class DynamicHeteroTrainer:
                         sanitized_z[nt] = z
 
                 # 4) align loss
-                try:
-                    a_z_f = sanitized_z.get("fmri", None)
-                    a_z_e = sanitized_z.get("eeg", None)
-                    if a_z_f is not None and a_z_e is not None:
-                        align_loss = self.aligner(a_z_f, a_z_e)
-                        if not isinstance(align_loss, torch.Tensor):
-                            raise TypeError("aligner must return a torch.Tensor")
-                    else:
-                        align_loss = torch.tensor(0.0, device=self.device)
-                except Exception as e:
-                    self.logger.error(f"Alignment loss computation failed at epoch {epoch}, batch {data_idx}: {e}")
-                    raise RuntimeError(f"Alignment loss computation failed: {e}")
+                a_z_f = sanitized_z.get("fmri", None)
+                a_z_e = sanitized_z.get("eeg", None)
+                if a_z_f is not None and a_z_e is not None:
+                    align_loss = self.aligner(a_z_f, a_z_e)
+                    if not isinstance(align_loss, torch.Tensor):
+                        raise TypeError("aligner must return a torch.Tensor")
+                else:
+                    align_loss = torch.tensor(0.0, device=self.device)
 
                 # 5) temporal prediction loss + raw 预测 loss
                 temp_loss = torch.tensor(0.0, device=self.device)
@@ -891,74 +734,11 @@ class DynamicHeteroTrainer:
                 # NEW: Use PredictorHead for prediction if enabled
                 predictor_loss = torch.tensor(0.0, device=self.device)
                 if self.enable_prediction and self.predictor is not None:
-                    try:
-                        # Use PredictorHead for multi-step prediction with sliding window
-                        # Log once per epoch to confirm prediction is running
-                        if data_idx == 0 and epoch % 10 == 0 and verbose:
-                            self.logger.info(f"[Prediction] Running autoregressive prediction (context={self.prediction_context_length}, steps={self.prediction_steps})")
-                        
-                        for nt in self.metadata[0]:
-                            seq = None
-                            if isinstance(proj_seq_dict, dict):
-                                seq = proj_seq_dict.get(nt, None)
-                            elif isinstance(proj_seq_dict, torch.Tensor):
-                                seq = proj_seq_dict
-                            if seq is None or (isinstance(seq, torch.Tensor) and seq.numel() == 0):
-                                continue
-                            if not isinstance(seq, torch.Tensor) or seq.ndim != 3:
-                                continue
-                            
-                            N, T, H = seq.shape
-                            min_required = (self.prediction_context_length or 10) + self.prediction_steps
-                            if T < min_required:
-                                if data_idx == 0 and verbose:
-                                    self.logger.warning(f"[Prediction] Sequence too short for '{nt}': T={T} < {min_required}, skipping")
-                                continue
-                            
-                            # Use sliding window to create multiple training samples
-                            # This enables autoregressive learning across the sequence
-                            context_len = self.prediction_context_length or 50
-                            stride = max(1, self.prediction_steps // 2)  # Overlap windows for more samples
-                            
-                            num_windows = 0
-                            window_loss = torch.tensor(0.0, device=self.device)
-                            
-                            # Slide window across the sequence
-                            for start_idx in range(0, T - context_len - self.prediction_steps + 1, stride):
-                                context_start = start_idx
-                                context_end = start_idx + context_len
-                                target_start = context_end
-                                target_end = context_end + self.prediction_steps
-                                
-                                if target_end > T:
-                                    break
-                                
-                                # Extract context and target
-                                context_seq = seq[:, context_start:context_end, :]
-                                target_seq = seq[:, target_start:target_end, :]
-                                
-                                # Predict using PredictorHead (autoregressive)
-                                predictions, _ = self.predictor(context_seq, return_attention=False)
-                                
-                                # Compute prediction loss for this window
-                                pred_loss = F_nn.mse_loss(predictions, target_seq)
-                                window_loss = window_loss + pred_loss
-                                num_windows += 1
-                            
-                            # Average over all windows
-                            if num_windows > 0:
-                                predictor_loss = predictor_loss + (window_loss / num_windows)
-                                # Log window count on first batch to show prediction is active
-                                if data_idx == 0 and epoch % 10 == 0 and verbose:
-                                    self.logger.info(f"  [{nt}] Trained on {num_windows} prediction windows (MSE={window_loss/num_windows:.6f})")
-                    except Exception as e:
-                        self.logger.error(f"Prediction loss computation failed at epoch {epoch}, batch {data_idx}: {e}")
-                        # Don't fail completely, just skip prediction for this batch
-                        self.logger.warning(f"Skipping prediction loss for this batch due to error")
-                        predictor_loss = torch.tensor(0.0, device=self.device)
-
-                # 5b) Temporal prediction loss (original method)
-                try:
+                    # Use PredictorHead for multi-step prediction with sliding window
+                    # Log once per epoch to confirm prediction is running
+                    if data_idx == 0 and epoch % 10 == 0 and verbose:
+                        self.logger.info(f"[Prediction] Running autoregressive prediction (context={self.prediction_context_length}, steps={self.prediction_steps})")
+                    
                     for nt in self.metadata[0]:
                         seq = None
                         if isinstance(proj_seq_dict, dict):
@@ -968,34 +748,84 @@ class DynamicHeteroTrainer:
                         if seq is None or (isinstance(seq, torch.Tensor) and seq.numel() == 0):
                             continue
                         if not isinstance(seq, torch.Tensor) or seq.ndim != 3:
-                            raise ValueError(f"proj_seq_dict['{nt}'] must be Tensor (N,T,H), got {None if seq is None else tuple(seq.shape)}")
+                            continue
+                        
+                        N, T, H = seq.shape
+                        min_required = (self.prediction_context_length or 10) + self.prediction_steps
+                        if T < min_required:
+                            continue
+                        
+                        # Use sliding window to create multiple training samples
+                        # This enables autoregressive learning across the sequence
+                        context_len = self.prediction_context_length or 50
+                        stride = max(1, self.prediction_steps // 2)  # Overlap windows for more samples
+                        
+                        num_windows = 0
+                        window_loss = torch.tensor(0.0, device=self.device)
+                        
+                        # Slide window across the sequence
+                        for start_idx in range(0, T - context_len - self.prediction_steps + 1, stride):
+                            context_start = start_idx
+                            context_end = start_idx + context_len
+                            target_start = context_end
+                            target_end = context_end + self.prediction_steps
+                            
+                            if target_end > T:
+                                break
+                            
+                            # Extract context and target
+                            context_seq = seq[:, context_start:context_end, :]
+                            target_seq = seq[:, target_start:target_end, :]
+                            
+                            # Predict using PredictorHead (autoregressive)
+                            predictions, _ = self.predictor(context_seq, return_attention=False)
+                            
+                            # Compute prediction loss for this window
+                            pred_loss = F_nn.mse_loss(predictions, target_seq)
+                            window_loss = window_loss + pred_loss
+                            num_windows += 1
+                        
+                        # Average over all windows
+                        if num_windows > 0:
+                            predictor_loss = predictor_loss + (window_loss / num_windows)
+                            # Log window count on first batch to show prediction is active
+                            if data_idx == 0 and epoch % 10 == 0 and verbose:
+                                self.logger.info(f"  [{nt}] Trained on {num_windows} prediction windows (MSE={window_loss/num_windows:.6f})")
 
-                        loss_t, pred_feat, pred_denorm = self._temporal_prediction_loss(
-                            seq, nt, return_preds=True, stats_nt=stats_dict.get(nt, None)
-                        )
-                        temp_loss = temp_loss + loss_t
+                for nt in self.metadata[0]:
+                    seq = None
+                    if isinstance(proj_seq_dict, dict):
+                        seq = proj_seq_dict.get(nt, None)
+                    elif isinstance(proj_seq_dict, torch.Tensor):
+                        seq = proj_seq_dict
+                    if seq is None or (isinstance(seq, torch.Tensor) and seq.numel() == 0):
+                        continue
+                    if not isinstance(seq, torch.Tensor) or seq.ndim != 3:
+                        raise ValueError(f"proj_seq_dict['{nt}'] must be Tensor (N,T,H), got {None if seq is None else tuple(seq.shape)}")
 
-                        # raw 预测 loss
-                        if pred_denorm is not None:
-                            if pred_denorm.ndim != 3:
-                                raise ValueError(f"pred_denorm for '{nt}' must be (N,T_pred,F_raw), got {tuple(pred_denorm.shape)}")
-                            targ_raw = getattr(data[nt], "x_seq", None)
-                            if targ_raw is None:
-                                raise RuntimeError(
-                                    f"pred_denorm returned for '{nt}' but data['{nt}'].x_seq is missing (cannot compute raw forecast loss)"
-                                )
-                            Np, Tp, Fp = pred_denorm.shape
-                            Nt, Tt, Ft = targ_raw.shape
-                            common_F = min(Fp, Ft)
-                            if Tt < Tp:
-                                raise ValueError(f"Target length {Tt} < predicted length {Tp} for '{nt}', cannot align")
-                            target_future = targ_raw.to(self.device)[:, -Tp:, :common_F]
-                            pred_crop = pred_denorm[:, :Tp, :common_F].to(self.device)
-                            raw_l = F_nn.mse_loss(pred_crop, target_future)
-                            raw_pred_loss_total = raw_pred_loss_total + raw_l
-                except Exception as e:
-                    self.logger.error(f"Temporal prediction loss computation failed at epoch {epoch}, batch {data_idx}: {e}")
-                    raise RuntimeError(f"Temporal prediction loss computation failed: {e}")
+                    loss_t, pred_feat, pred_denorm = self._temporal_prediction_loss(
+                        seq, nt, return_preds=True, stats_nt=stats_dict.get(nt, None)
+                    )
+                    temp_loss = temp_loss + loss_t
+
+                    # raw 预测 loss
+                    if pred_denorm is not None:
+                        if pred_denorm.ndim != 3:
+                            raise ValueError(f"pred_denorm for '{nt}' must be (N,T_pred,F_raw), got {tuple(pred_denorm.shape)}")
+                        targ_raw = getattr(data[nt], "x_seq", None)
+                        if targ_raw is None:
+                            raise RuntimeError(
+                                f"pred_denorm returned for '{nt}' but data['{nt}'].x_seq is missing (cannot compute raw forecast loss)"
+                            )
+                        Np, Tp, Fp = pred_denorm.shape
+                        Nt, Tt, Ft = targ_raw.shape
+                        common_F = min(Fp, Ft)
+                        if Tt < Tp:
+                            raise ValueError(f"Target length {Tt} < predicted length {Tp} for '{nt}', cannot align")
+                        target_future = targ_raw.to(self.device)[:, -Tp:, :common_F]
+                        pred_crop = pred_denorm[:, :Tp, :common_F].to(self.device)
+                        raw_l = F_nn.mse_loss(pred_crop, target_future)
+                        raw_pred_loss_total = raw_pred_loss_total + raw_l
 
                 # 6) 构建 recon_final_map（优先级：recon_feature_dict+denorm → recon_seq_scaled → recon_seq_dict+denorm）
                 recon_final_map: Dict[str, torch.Tensor] = {}
@@ -1182,42 +1012,30 @@ class DynamicHeteroTrainer:
                     loss = loss / self.gradient_accumulation_steps
 
                 # 12) backward + step (with gradient accumulation)
-                try:
-                    if self.use_amp:
-                        self.scaler.scale(loss).backward()
-                        
-                        # Ensure CUDA operations complete if using GPU
-                        if self.device.type == 'cuda':
-                            torch.cuda.synchronize()
-                        
-                        # Only step optimizer every N accumulation steps
-                        if (data_idx + 1) % self.gradient_accumulation_steps == 0 or (data_idx + 1) == len(self.data_list):
-                            if self.grad_clip > 0:
-                                self.scaler.unscale_(self.optimizer)
-                                params_to_clip = list(self.model.parameters()) + list(self.aligner.parameters())
-                                if self.predictor is not None:
-                                    params_to_clip += list(self.predictor.parameters())
-                                torch.nn.utils.clip_grad_norm_(params_to_clip, self.grad_clip)
-                            self.scaler.step(self.optimizer)
-                            self.scaler.update()
-                    else:
-                        loss.backward()
-                        
-                        # Ensure CUDA operations complete if using GPU
-                        if self.device.type == 'cuda':
-                            torch.cuda.synchronize()
-                        
-                        # Only step optimizer every N accumulation steps
-                        if (data_idx + 1) % self.gradient_accumulation_steps == 0 or (data_idx + 1) == len(self.data_list):
-                            if self.grad_clip > 0:
-                                params_to_clip = list(self.model.parameters()) + list(self.aligner.parameters())
-                                if self.predictor is not None:
-                                    params_to_clip += list(self.predictor.parameters())
-                                torch.nn.utils.clip_grad_norm_(params_to_clip, self.grad_clip)
-                            self.optimizer.step()
-                except Exception as e:
-                    self.logger.error(f"Backward/optimization failed at epoch {epoch}, batch {data_idx}: {e}")
-                    raise RuntimeError(f"Backward pass or optimizer step failed: {e}")
+                if self.use_amp:
+                    self.scaler.scale(loss).backward()
+                    
+                    # Only step optimizer every N accumulation steps
+                    if (data_idx + 1) % self.gradient_accumulation_steps == 0 or (data_idx + 1) == len(self.data_list):
+                        if self.grad_clip > 0:
+                            self.scaler.unscale_(self.optimizer)
+                            params_to_clip = list(self.model.parameters()) + list(self.aligner.parameters())
+                            if self.predictor is not None:
+                                params_to_clip += list(self.predictor.parameters())
+                            torch.nn.utils.clip_grad_norm_(params_to_clip, self.grad_clip)
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                else:
+                    loss.backward()
+                    
+                    # Only step optimizer every N accumulation steps
+                    if (data_idx + 1) % self.gradient_accumulation_steps == 0 or (data_idx + 1) == len(self.data_list):
+                        if self.grad_clip > 0:
+                            params_to_clip = list(self.model.parameters()) + list(self.aligner.parameters())
+                            if self.predictor is not None:
+                                params_to_clip += list(self.predictor.parameters())
+                            torch.nn.utils.clip_grad_norm_(params_to_clip, self.grad_clip)
+                        self.optimizer.step()
 
                 # 13) accumulate stats
                 total_loss += float(loss.detach().cpu())
@@ -1235,7 +1053,6 @@ class DynamicHeteroTrainer:
                     self.logger.info(f"[Train] epoch={epoch} batch=0 recon_losses={recon_losses_per_nt}")
 
             if batches == 0:
-                self.logger.error("[Train] No batches processed in epoch; check data_list and graph_encoder outputs")
                 raise RuntimeError("[Train] No batches processed in epoch; check data_list and graph_encoder outputs")
 
             # 14) epoch-level log & scheduler
@@ -1341,21 +1158,7 @@ class DynamicHeteroTrainer:
                 self.logger.info(log_msg)
                 self.logger.info(f"[Epoch {epoch}] relative_error={rel_error_epoch}")
 
-        except Exception as e:
-            # Ensure heartbeat stops even on error
-            heartbeat.stop()
-            self.logger.error(f"Training failed with exception: {e}")
-            raise
-        finally:
-            # Always stop heartbeat on exit
-            if heartbeat.active:
-                heartbeat.stop()
-
         # Training completed - save metrics and print summary
-        heartbeat.stop()
-        self.logger.info("✓ Training completed successfully")
-        self.logger.info("✓ Heartbeat monitor stopped")
-        
         if self.metrics_tracker is not None:
             self.metrics_tracker.save_metrics()
             self.metrics_tracker.print_summary(last_n_epochs=min(10, epochs))

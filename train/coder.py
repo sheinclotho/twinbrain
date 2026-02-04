@@ -386,6 +386,9 @@ class GraphEncoder(nn.Module):
 
             # 初始化 NodeEncoder
             if nt not in self.encoders:
+                # NodeEncoder will be created on x_seq.device
+                # Since data is moved to target device before calling GraphEncoder,
+                # this ensures NodeEncoders are on the correct device
                 self.encoders[nt] = NodeEncoder(self.spatial_T, self.hidden_dim).to(x_seq.device)
 
             enc: NodeEncoder = self.encoders[nt]
