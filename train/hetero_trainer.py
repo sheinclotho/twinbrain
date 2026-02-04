@@ -668,6 +668,27 @@ class DynamicHeteroTrainer:
         else:
             self.logger.info(f"  ✓ Using device: {self.device}")
         
+        # NEW: Inspect first batch to validate data structure
+        try:
+            first_data = self.data_list[0]
+            self.logger.info(f"  ✓ First batch inspection:")
+            self.logger.info(f"    - Type: {type(first_data)}")
+            if hasattr(first_data, 'node_types'):
+                self.logger.info(f"    - Node types: {first_data.node_types}")
+            if hasattr(first_data, 'edge_types'):
+                self.logger.info(f"    - Edge types: {first_data.edge_types}")
+            # Check each node type
+            for nt in self.metadata[0]:
+                if hasattr(first_data, nt):
+                    node_data = getattr(first_data, nt)
+                    if hasattr(node_data, 'x_seq'):
+                        x_seq = node_data.x_seq
+                        self.logger.info(f"    - {nt}.x_seq shape: {tuple(x_seq.shape)}, dtype: {x_seq.dtype}")
+                    if hasattr(node_data, 'num_nodes'):
+                        self.logger.info(f"    - {nt}.num_nodes: {node_data.num_nodes}")
+        except Exception as e:
+            self.logger.warning(f"  ⚠ Could not inspect first batch: {e}")
+        
         # NEW: Log training configuration at start
         self.logger.info("=" * 80)
         self.logger.info(f"Starting Training: {epochs} epochs")
@@ -686,137 +707,137 @@ class DynamicHeteroTrainer:
 
         try:
             # batch_rescale 默认配置防御
-        if "warmup_epochs" not in self.batch_rescale_cfg:
-            self.batch_rescale_cfg["warmup_epochs"] = 0
-        if not hasattr(self, "scale_only_epochs"):
-            self.scale_only_epochs = 0
-        if not hasattr(self, "scale_only_lr_mul"):
-            self.scale_only_lr_mul = 20.0
+            if "warmup_epochs" not in self.batch_rescale_cfg:
+                self.batch_rescale_cfg["warmup_epochs"] = 0
+            if not hasattr(self, "scale_only_epochs"):
+                self.scale_only_epochs = 0
+            if not hasattr(self, "scale_only_lr_mul"):
+                self.scale_only_lr_mul = 20.0
 
-        monitor_nt = "fmri"
-        patience = getattr(self, "early_stop_patience", 5)
-        lr_shrink = float(getattr(self, "early_stop_lr_shrink", 0.5))
-        min_lr = float(getattr(self, "early_stop_min_lr", 1e-7))
+            monitor_nt = "fmri"
+            patience = getattr(self, "early_stop_patience", 5)
+            lr_shrink = float(getattr(self, "early_stop_lr_shrink", 0.5))
+            min_lr = float(getattr(self, "early_stop_min_lr", 1e-7))
 
-        # warmup: freeze scale
-        if self.warmup_epochs > 0 and self.freeze_scale_during_warmup:
-            self._set_scale_requires_grad(False)
-            self.logger.info(f"[Warmup] freezing scale params for {self.warmup_epochs} epochs")
+            # warmup: freeze scale
+            if self.warmup_epochs > 0 and self.freeze_scale_during_warmup:
+                self._set_scale_requires_grad(False)
+                self.logger.info(f"[Warmup] freezing scale params for {self.warmup_epochs} epochs")
 
-        best_rel = float("inf")
-        best_epoch = 0
-        no_improve = 0
-        best_model_state = None
-        best_opt_state = None
+            best_rel = float("inf")
+            best_epoch = 0
+            no_improve = 0
+            best_model_state = None
+            best_opt_state = None
 
-        # helper: model 输出校验
-        def _validate_model_outputs(outputs):
-            if not (isinstance(outputs, (list, tuple)) and len(outputs) == 8):
-                raise RuntimeError(
-                    "model.forward must return 8-tuple "
-                    "(z_dict, gru_out, proj_seq_dict, recon_seq_denorm, recon_seq_scaled, "
-                    "global_seq, recon_feature_dict, recon_denorm_dict). "
-                    f"Got type={type(outputs)}, len={len(outputs) if isinstance(outputs,(list,tuple)) else 'N/A'}"
-                )
-            return outputs
-
-        for epoch in range(1, epochs + 1):
-            start = time.time()
-            total_loss = total_align = total_temp = total_recon = total_recon_norm = total_spec = 0.0
-            total_predictor = 0.0  # NEW: Track PredictorHead loss
-            batches = 0
-            
-            # Update heartbeat at epoch start
-            heartbeat.update(f"Starting epoch {epoch}/{epochs}")
-
-            # warmup 结束后解冻 scale
-            if epoch == self.warmup_epochs + 1 and self.freeze_scale_during_warmup:
-                self._set_scale_requires_grad(True)
-                self.logger.info("[Warmup] unfreezing scale params, resuming full training")
-
-            # batch_rescale 的 warmup 结束后禁用
-            if self.batch_rescale_cfg.get("enable", False) and epoch > int(self.batch_rescale_cfg.get("warmup_epochs", 0)):
-                self.batch_rescale_cfg["enable"] = False
-                self.logger.info(
-                    f"[BatchRescale] warmup_epochs passed ({self.batch_rescale_cfg.get('warmup_epochs')}), disabling batch_rescale"
-                )
-
-            for data_idx, data in enumerate(self.data_list):
-                # Update heartbeat every batch
-                if data_idx % 5 == 0:
-                    heartbeat.update()
-                    
-                # Log progress every batch in first epoch, then every 10 batches
-                if epoch == 1 or data_idx % 10 == 0:
-                    self.logger.info(f"[Epoch {epoch}/{epochs}] Processing batch {data_idx + 1}/{len(self.data_list)}...")
-                
-                try:
-                    # Move data to device with timeout protection
-                    data = data.to(self.device)
-                    
-                    # Ensure CUDA operations complete if using GPU
-                    if self.device.type == 'cuda':
-                        torch.cuda.synchronize()
-                except RuntimeError as e:
-                    self.logger.error(f"Failed to move data to device: {e}")
-                    raise RuntimeError(f"Data transfer to {self.device} failed at epoch {epoch}, batch {data_idx}: {e}")
-                
-                # Zero gradients only at start of accumulation cycle
-                if data_idx % self.gradient_accumulation_steps == 0:
-                    self.optimizer.zero_grad(set_to_none=True)
-
-                # 1) GraphEncoder with error handling
-                try:
-                    if data_idx == 0:
-                        self.logger.info(f"[Epoch {epoch}] Running GraphEncoder on batch {data_idx}...")
-                    enc_out = self.graph_encoder(data)
-                    
-                    # Ensure CUDA operations complete if using GPU
-                    if self.device.type == 'cuda':
-                        torch.cuda.synchronize()
-                        
-                    if data_idx == 0:
-                        self.logger.info(f"[Epoch {epoch}] GraphEncoder completed successfully")
-                except Exception as e:
-                    self.logger.error(f"GraphEncoder failed at epoch {epoch}, batch {data_idx}: {e}")
-                    self.logger.error(f"Data type: {type(data)}, Device: {self.device}")
-                    raise RuntimeError(f"GraphEncoder forward pass failed: {e}")
-                
-                if not (isinstance(enc_out, (list, tuple)) and len(enc_out) >= 5):
+            # helper: model 输出校验
+            def _validate_model_outputs(outputs):
+                if not (isinstance(outputs, (list, tuple)) and len(outputs) == 8):
                     raise RuntimeError(
-                        "graph_encoder(data) must return at least 5-tuple "
-                        "(x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict, ...). "
-                        f"Received type={type(enc_out)}"
+                        "model.forward must return 8-tuple "
+                        "(z_dict, gru_out, proj_seq_dict, recon_seq_denorm, recon_seq_scaled, "
+                        "global_seq, recon_feature_dict, recon_denorm_dict). "
+                        f"Got type={type(outputs)}, len={len(outputs) if isinstance(outputs,(list,tuple)) else 'N/A'}"
                     )
-                x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict = enc_out[:5]
+                return outputs
 
-                # 2) model forward with error handling
-                try:
-                    if data_idx == 0:
-                        self.logger.info(f"[Epoch {epoch}] Running model forward pass...")
-                    outputs = self.model(
-                        data=data,
-                        edge_index_dict=edge_index_dict,
-                        encoded_dict=x_dict,
-                        num_nodes_dict=num_nodes_dict,
-                        stats_dict=stats_dict,
+            for epoch in range(1, epochs + 1):
+                start = time.time()
+                total_loss = total_align = total_temp = total_recon = total_recon_norm = total_spec = 0.0
+                total_predictor = 0.0  # NEW: Track PredictorHead loss
+                batches = 0
+                
+                # Update heartbeat at epoch start
+                heartbeat.update(f"Starting epoch {epoch}/{epochs}")
+
+                # warmup 结束后解冻 scale
+                if epoch == self.warmup_epochs + 1 and self.freeze_scale_during_warmup:
+                    self._set_scale_requires_grad(True)
+                    self.logger.info("[Warmup] unfreezing scale params, resuming full training")
+
+                # batch_rescale 的 warmup 结束后禁用
+                if self.batch_rescale_cfg.get("enable", False) and epoch > int(self.batch_rescale_cfg.get("warmup_epochs", 0)):
+                    self.batch_rescale_cfg["enable"] = False
+                    self.logger.info(
+                        f"[BatchRescale] warmup_epochs passed ({self.batch_rescale_cfg.get('warmup_epochs')}), disabling batch_rescale"
                     )
-                    
-                    # Ensure CUDA operations complete if using GPU
-                    if self.device.type == 'cuda':
-                        torch.cuda.synchronize()
+
+                for data_idx, data in enumerate(self.data_list):
+                    # Update heartbeat every batch
+                    if data_idx % 5 == 0:
+                        heartbeat.update()
                         
-                    if data_idx == 0:
-                        self.logger.info(f"[Epoch {epoch}] Model forward completed successfully")
-                except Exception as e:
-                    self.logger.error(f"Model forward failed at epoch {epoch}, batch {data_idx}: {e}")
-                    raise RuntimeError(f"Model forward pass failed: {e}")
-                (
-                    z_dict,
-                    gru_seq_dict,
-                    proj_seq_dict,
-                    recon_seq_dict,
-                    recon_seq_scaled,
+                    # Log progress every batch in first epoch, then every 10 batches
+                    if epoch == 1 or data_idx % 10 == 0:
+                        self.logger.info(f"[Epoch {epoch}/{epochs}] Processing batch {data_idx + 1}/{len(self.data_list)}...")
+                    
+                    try:
+                        # Move data to device with timeout protection
+                        data = data.to(self.device)
+                        
+                        # Ensure CUDA operations complete if using GPU
+                        if self.device.type == 'cuda':
+                            torch.cuda.synchronize()
+                    except RuntimeError as e:
+                        self.logger.error(f"Failed to move data to device: {e}")
+                        raise RuntimeError(f"Data transfer to {self.device} failed at epoch {epoch}, batch {data_idx}: {e}")
+                    
+                    # Zero gradients only at start of accumulation cycle
+                    if data_idx % self.gradient_accumulation_steps == 0:
+                        self.optimizer.zero_grad(set_to_none=True)
+
+                    # 1) GraphEncoder with error handling
+                    try:
+                        if data_idx == 0:
+                            self.logger.info(f"[Epoch {epoch}] Running GraphEncoder on batch {data_idx}...")
+                        enc_out = self.graph_encoder(data)
+                        
+                        # Ensure CUDA operations complete if using GPU
+                        if self.device.type == 'cuda':
+                            torch.cuda.synchronize()
+                            
+                        if data_idx == 0:
+                            self.logger.info(f"[Epoch {epoch}] GraphEncoder completed successfully")
+                    except Exception as e:
+                        self.logger.error(f"GraphEncoder failed at epoch {epoch}, batch {data_idx}: {e}")
+                        self.logger.error(f"Data type: {type(data)}, Device: {self.device}")
+                        raise RuntimeError(f"GraphEncoder forward pass failed: {e}")
+                    
+                    if not (isinstance(enc_out, (list, tuple)) and len(enc_out) >= 5):
+                        raise RuntimeError(
+                            "graph_encoder(data) must return at least 5-tuple "
+                            "(x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict, ...). "
+                            f"Received type={type(enc_out)}"
+                        )
+                    x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict = enc_out[:5]
+
+                    # 2) model forward with error handling
+                    try:
+                        if data_idx == 0:
+                            self.logger.info(f"[Epoch {epoch}] Running model forward pass...")
+                        outputs = self.model(
+                            data=data,
+                            edge_index_dict=edge_index_dict,
+                            encoded_dict=x_dict,
+                            num_nodes_dict=num_nodes_dict,
+                            stats_dict=stats_dict,
+                        )
+                        
+                        # Ensure CUDA operations complete if using GPU
+                        if self.device.type == 'cuda':
+                            torch.cuda.synchronize()
+                            
+                        if data_idx == 0:
+                            self.logger.info(f"[Epoch {epoch}] Model forward completed successfully")
+                    except Exception as e:
+                        self.logger.error(f"Model forward failed at epoch {epoch}, batch {data_idx}: {e}")
+                        raise RuntimeError(f"Model forward pass failed: {e}")
+                    (
+                        z_dict,
+                        gru_seq_dict,
+                        proj_seq_dict,
+                        recon_seq_dict,
+                        recon_seq_scaled,
                     global_seq,
                     recon_feature_dict,
                     recon_denorm_dict,
