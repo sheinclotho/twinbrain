@@ -1,303 +1,463 @@
-# Unity Integration Examples
+# Unity 集成示例
 
-This directory contains Unity C# scripts for visualizing TwinBrain brain states in Unity 3D.
+本目录包含用于在 Unity 3D 中可视化 TwinBrain 脑状态的 Unity C# 脚本。
 
-## Files
+## 📁 文件说明
 
-- `BrainVisualization.cs` - Main visualization component
-- `BrainConfigLoader.cs` - Auto-load configuration from unity_config.json
-- `WebSocketClient.cs` - WebSocket client for real-time updates
+### 核心脚本
 
-## Quick Start
+1. **BrainVisualization.cs**
+   - 主要的大脑可视化控制器
+   - 加载和渲染 200 个脑区
+   - 处理时间序列动画
+   - 根据活动值更新颜色和大小
 
-### 1. Setup Unity Project
+2. **BrainConfigLoader.cs**
+   - 加载 JSON 配置文件
+   - 解析脑区位置和网络信息
+   - 管理材质和颜色映射
 
-1. Create a new Unity project (Unity 2020.3 or later)
-2. Install Newtonsoft.Json package via Package Manager:
-   - Window → Package Manager
-   - Click "+" → Add package from git URL
-   - Enter: `com.unity.nuget.newtonsoft-json`
+3. **WebSocketClient.cs**
+   - 与 Python 后端实时通信
+   - 接收实时脑状态更新
+   - 处理虚拟刺激命令
 
-### 2. Add Scripts to Unity
+## 🚀 快速开始
 
-1. Copy all `.cs` files from `unity_examples/` to your Unity project's `Assets/Scripts/` folder:
-   - `BrainVisualization.cs` - Main visualization
-   - `BrainConfigLoader.cs` - Auto-configuration loader
-   - `WebSocketClient.cs` - Real-time communication (optional)
+### 步骤 1：设置 Unity 项目
 
-2. Create an empty GameObject in the scene (GameObject → Create Empty)
-3. Rename it to "BrainVisualization"
-4. Add the `BrainVisualization` component to it
-5. Add the `BrainConfigLoader` component to it (optional, for auto-configuration)
+1. 创建新的 Unity 3D 项目（推荐 Unity 2021.3 LTS 或更高版本）
+2. 将此目录中的所有 `.cs` 文件复制到 `Assets/Scripts/` 文件夹
 
-### 3. Export Data from TwinBrain
+### 步骤 2：导入脑数据
 
-Run the Python workflow to generate all necessary files:
+运行 Python 导出脚本：
 
 ```bash
-cd /path/to/twinbrain
-python example_unity_workflow.py
+python unity_automation.py --mode export --output unity_data
 ```
 
-This will create a complete export with:
-- `output/*/json/` - JSON brain states
-- `output/*/obj/` - 3D models (optional)
-- `output/*/unity_config.json` - Unity configuration
-- `output/*/materials/` - Material configurations
-- `output/*/workflow_report.json` - Execution report
+这会生成：
+- `unity_data/json/` - 时间序列脑状态数据
+- `unity_data/obj/` - 3D 脑模型
+- `unity_data/unity_config.json` - Unity 配置
 
-**Quick export:**
-```python
-from unity_integration import run_unity_workflow, WorkflowConfig
+### 步骤 3：在 Unity 中设置场景
 
-config = WorkflowConfig(
-    output_dir='output/my_export',
-    export_formats=['json'],
-    time_step=5
-)
-results = run_unity_workflow(config)
+1. **创建空的 GameObject**：
+   - 命名为 "BrainVisualizationManager"
+   - 添加 `BrainVisualization.cs` 组件
+
+2. **配置组件**：
+   - **JSON Directory**: 指向 `unity_data/json/`
+   - **Config File**: 指向 `unity_data/unity_config.json`
+   - **Region Prefab**: 创建球体预制件
+   - **Material**: 创建标准材质
+
+3. **导入 OBJ 模型**（可选）：
+   - 将 `brain_regions.obj` 拖入 Assets
+   - 在场景中实例化
+
+### 步骤 4：运行可视化
+
+点击 Unity 播放按钮。您应该看到：
+- 200 个脑区球体
+- 根据活动值变化的颜色
+- 时间序列动画（如果启用）
+
+## 📖 使用说明
+
+### BrainVisualization 组件
+
+**公共属性**：
+
+```csharp
+public class BrainVisualization : MonoBehaviour
+{
+    // 数据路径
+    public string jsonDirectory = "unity_data/json";
+    public string configFilePath = "unity_data/unity_config.json";
+    
+    // 预制件和材质
+    public GameObject regionPrefab;  // 球体预制件
+    public Material regionMaterial;  // 脑区材质
+    
+    // 可视化设置
+    public float regionScale = 1.0f;  // 脑区大小缩放
+    public float activityThreshold = 0.3f;  // 活动阈值
+    
+    // 动画设置
+    public bool autoPlay = true;  // 自动播放动画
+    public float fps = 10f;  // 每秒帧数
+}
 ```
 
-### 4. Configure in Unity
+**公共方法**：
 
-#### Option A: Auto-Configuration (Recommended)
+```csharp
+// 加载特定时间点的脑状态
+public void LoadBrainState(int timePoint);
 
-If you added `BrainConfigLoader`:
+// 播放/暂停动画
+public void PlayAnimation();
+public void PauseAnimation();
 
-1. Select the BrainVisualization GameObject
-2. In the BrainConfigLoader component:
-   - Config Path: `path/to/output/unity_config.json`
-   - Auto Load: ✓ (checked)
-3. Press Play - settings will be loaded automatically!
+// 设置活动阈值
+public void SetActivityThreshold(float threshold);
 
-#### Option B: Manual Configuration
+// 更新单个脑区的活动
+public void UpdateRegionActivity(int regionId, float activity);
+```
 
-Select the BrainVisualization GameObject and configure manually:
+### BrainConfigLoader 组件
 
-#### For Single State:
-- JSON Path: `path/to/output/brain_state_t100.json`
-- Load Sequence: ✗ (unchecked)
+**用途**：加载和解析配置文件
 
-#### For Animation:
-- JSON Path: `path/to/output/brain_sequence`
-- Load Sequence: ✓ (checked)
-- FPS: 10
-- Auto Play: ✓ (checked)
+```csharp
+public class BrainConfigLoader
+{
+    // 加载配置
+    public BrainConfig LoadConfig(string configPath);
+    
+    // 获取脑区信息
+    public RegionInfo GetRegionInfo(int regionId);
+    
+    // 获取网络信息
+    public NetworkInfo GetNetworkInfo(string networkName);
+}
+```
 
-#### Visualization Settings:
-- Region Prefab: Drag a sphere prefab (optional)
-- Connection Material: Create a material with alpha blending
-- Region Scale: 1.0
-- Activity Threshold: 0.3
-- Show Connections: ✓
-- Connection Threshold: 0.5
-
-#### Colors:
-- Low Activity Color: Blue (RGB: 0, 0, 255)
-- High Activity Color: Red (RGB: 255, 0, 0)
-
-### 5. Run
-
-Press Play in Unity. You should see:
-- Brain regions as colored spheres (color = activity level)
-- Connections as lines between regions
-- Animation if using sequence mode
-
-### Controls
-
-- **Space**: Play/Pause animation
-- **R**: Reload current state
-
-## JSON Format
-
-The script expects JSON files in this format:
+**配置文件格式**：
 
 ```json
 {
-  "version": "2.0",
-  "metadata": {
-    "subject": "sub-01",
-    "atlas": "Schaefer200",
-    "time_point": 100
-  },
-  "brain_state": {
-    "regions": [
-      {
-        "id": 0,
-        "label": "Region_1",
-        "position": {"x": -5, "y": -85, "z": 5},
-        "activity": {
-          "fmri": {"amplitude": 0.75}
-        }
-      }
-    ],
-    "connections": [
-      {
-        "source": 0,
-        "target": 1,
-        "strength": 0.65,
-        "type": "structural"
-      }
-    ]
+  "atlas": "Schaefer200",
+  "regions": [
+    {
+      "id": 1,
+      "label": "7Networks_LH_Vis_1",
+      "position": [-10.5, -85.2, 5.1],
+      "network": "Visual",
+      "hemisphere": "left"
+    }
+  ],
+  "networks": {
+    "Visual": {"color": [120, 18, 134]},
+    "Somatomotor": {"color": [70, 130, 180]}
   }
 }
 ```
 
-See [系统使用指南](../TwinBrain系统使用指南.md) for detailed format specification.
+### WebSocketClient 组件
 
-## Advanced Usage
-
-### Custom Region Prefabs
-
-Create a prefab with:
-1. Mesh (e.g., sphere, brain region shape)
-2. Material with shader that supports colors
-3. Optional: Add glow effect for high activity
-
-Assign to "Region Prefab" field.
-
-### Custom Connection Materials
-
-Create a material with:
-1. Shader: Particles/Standard Unlit or custom shader
-2. Rendering Mode: Fade or Transparent
-3. Enable alpha blending
-
-Assign to "Connection Material" field.
-
-### Interaction
-
-Add interactivity by extending the script:
+**用途**：实时通信
 
 ```csharp
-// In BrainVisualization.cs
-
-void OnRegionClick(int regionId)
+public class WebSocketClient : MonoBehaviour
 {
-    Debug.Log($"Clicked region {regionId}");
-    // Show region details
-    // Highlight connections
-    // etc.
+    public string serverUrl = "ws://localhost:8765";
+    
+    // 连接到服务器
+    public async Task Connect();
+    
+    // 发送消息
+    public async Task SendMessage(string message);
+    
+    // 接收消息的回调
+    public event Action<string> OnMessageReceived;
 }
 ```
 
-## Real-time Communication
-
-### Setup WebSocket Connection
-
-1. Add `WebSocketClient` component to a GameObject
-2. Start the TwinBrain server:
-
-```bash
-python -c "
-from unity_integration import BrainVisualizationServer
-server = BrainVisualizationServer(port=8765)
-server.start()
-"
-```
-
-3. In Unity, configure WebSocketClient:
-   - Server URL: `ws://localhost:8765`
-   - Auto Connect: ✓
-
-### Use WebSocket Client
+**使用示例**：
 
 ```csharp
-// Get reference
+// 连接到 Python 后端
 WebSocketClient client = GetComponent<WebSocketClient>();
+await client.Connect();
 
-// Register event handlers
-client.OnBrainStateReceived += (state) => {
-    Debug.Log($"Received brain state at time {state.metadata.time_second}");
-    // Update visualization...
+// 监听消息
+client.OnMessageReceived += (message) => {
+    BrainState state = JsonUtility.FromJson<BrainState>(message);
+    UpdateVisualization(state);
 };
 
-// Request current state
-client.GetBrainState();
-
-// Request prediction
-client.RequestPrediction(nSteps: 20);
-
-// Simulate stimulation
-client.SimulateStimulation(
-    targetRegions: new int[] {10, 15, 20},
-    amplitude: 0.5f,
-    pattern: "sine"
-);
-
-// Start streaming
-client.StartStream(fps: 10, duration: 60);
+// 发送刺激请求
+var stimRequest = new {
+    type = "stimulation",
+    target_regions = new int[] {10, 15, 20},
+    amplitude = 0.5
+};
+await client.SendMessage(JsonUtility.ToJson(stimRequest));
 ```
 
-## Troubleshooting
+## 🎨 自定义可视化
 
-### Regions not visible
+### 颜色映射
 
-- Check Activity Threshold setting (lower it)
-- Verify JSON file path is correct
-- Check console for errors
+修改颜色梯度：
 
-### Connections not showing
+```csharp
+public class CustomColorMapper
+{
+    // 活动值到颜色
+    public Color ActivityToColor(float activity)
+    {
+        // 低活动：蓝色
+        // 高活动：红色
+        if (activity < 0.3f)
+            return Color.blue;
+        else if (activity < 0.7f)
+            return Color.yellow;
+        else
+            return Color.red;
+    }
+}
+```
 
-- Enable "Show Connections"
-- Lower "Connection Threshold"
-- Verify connectivity data in JSON
+### 大小映射
 
-### Animation not playing
+根据活动调整脑区大小：
 
-- Check "Auto Play" is enabled
-- Verify sequence_index.json exists in directory
-- Check FPS setting (try lower value first)
+```csharp
+public void UpdateRegionSize(GameObject region, float activity)
+{
+    // 活动越高，球体越大
+    float scale = 1.0f + activity * 2.0f;
+    region.transform.localScale = Vector3.one * scale;
+}
+```
 
-### Performance issues
+### 网络着色
 
-- Reduce number of connections (increase threshold)
-- Disable connections for large networks
-- Use simpler region prefabs
-- Lower frame rate
+按网络给脑区着色：
 
-## Examples
+```csharp
+// 网络颜色
+Dictionary<string, Color> networkColors = new Dictionary<string, Color>()
+{
+    {"Visual", new Color(120/255f, 18/255f, 134/255f)},
+    {"Somatomotor", new Color(70/255f, 130/255f, 180/255f)},
+    {"Dorsal Attention", new Color(0/255f, 118/255f, 14/255f)},
+    {"Ventral Attention", new Color(196/255f, 58/255f, 250/255f)},
+    {"Limbic", new Color(220/255f, 248/255f, 164/255f)},
+    {"Frontoparietal", new Color(230/255f, 148/255f, 34/255f)},
+    {"Default Mode", new Color(205/255f, 62/255f, 78/255f)}
+};
 
-### Example 1: Static Visualization
+// 应用网络颜色
+public void ColorByNetwork(GameObject region, string network)
+{
+    Renderer renderer = region.GetComponent<Renderer>();
+    renderer.material.color = networkColors[network];
+}
+```
 
-Display a single brain state:
-1. Set JSON Path to single JSON file
-2. Uncheck Load Sequence
-3. Play
+## 🔧 高级功能
 
-### Example 2: Time Series Animation
+### 连接可视化
 
-Animate brain activity over time:
-1. Set JSON Path to sequence directory
-2. Check Load Sequence
-3. Set FPS to 10
-4. Check Auto Play
-5. Play
+显示脑区之间的连接：
 
-### Example 3: Stimulation Response
+```csharp
+public class ConnectionVisualizer
+{
+    public void DrawConnection(Vector3 start, Vector3 end, float strength)
+    {
+        LineRenderer line = CreateLine();
+        line.SetPositions(new Vector3[] {start, end});
+        line.startWidth = strength * 0.1f;
+        line.endWidth = strength * 0.1f;
+        
+        // 颜色基于强度
+        Color color = Color.Lerp(Color.white, Color.yellow, strength);
+        line.material.color = color;
+    }
+}
+```
 
-Visualize response to stimulation:
-1. Set JSON Path to stimulation_response directory
-2. Check Load Sequence
-3. FPS: 10
-4. Play
-5. Observe activity change when stimulation is active
+### 交互控制
 
-## Next Steps
+添加鼠标交互：
 
-1. Customize colors and materials for your needs
-2. Add UI controls for threshold adjustments
-3. Implement region highlighting and selection
-4. Add network analysis visualizations
-5. Integrate with WebSocket for real-time updates
+```csharp
+public class BrainInteraction : MonoBehaviour
+{
+    void Update()
+    {
+        if (Input.GetMouseButtonDown(0))
+        {
+            Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
+            RaycastHit hit;
+            
+            if (Physics.Raycast(ray, out hit))
+            {
+                // 点击了脑区
+                BrainRegion region = hit.collider.GetComponent<BrainRegion>();
+                if (region != null)
+                {
+                    ShowRegionInfo(region);
+                }
+            }
+        }
+    }
+    
+    void ShowRegionInfo(BrainRegion region)
+    {
+        Debug.Log($"Region {region.id}: {region.label}");
+        Debug.Log($"Activity: {region.currentActivity}");
+        Debug.Log($"Network: {region.network}");
+    }
+}
+```
 
-## Support
+### 时间控制
 
-For issues or questions:
-- Check [系统使用指南](../TwinBrain系统使用指南.md)
-- See [优化方向](../TwinBrain优化方向和研究思路.md) for advanced features
-- Submit issues on GitHub
+添加时间轴控制：
 
-## License
+```csharp
+public class TimelineController : MonoBehaviour
+{
+    public Slider timelineSlider;
+    private BrainVisualization brain;
+    
+    void Start()
+    {
+        brain = GetComponent<BrainVisualization>();
+        timelineSlider.onValueChanged.AddListener(OnTimelineChanged);
+    }
+    
+    void OnTimelineChanged(float value)
+    {
+        // 值范围 0-1，映射到时间点
+        int maxTime = brain.GetMaxTimePoint();
+        int timePoint = Mathf.RoundToInt(value * maxTime);
+        brain.LoadBrainState(timePoint);
+    }
+}
+```
 
-[Same as main project]
+## 📊 性能优化
+
+### 对象池
+
+重用游戏对象：
+
+```csharp
+public class RegionPool
+{
+    private Queue<GameObject> pool = new Queue<GameObject>();
+    
+    public GameObject Get()
+    {
+        if (pool.Count > 0)
+            return pool.Dequeue();
+        else
+            return Instantiate(regionPrefab);
+    }
+    
+    public void Return(GameObject obj)
+    {
+        obj.SetActive(false);
+        pool.Enqueue(obj);
+    }
+}
+```
+
+### LOD（细节层次）
+
+距离相机较远时简化：
+
+```csharp
+public void UpdateLOD(GameObject region, float distance)
+{
+    if (distance > 50f)
+    {
+        // 远距离：低细节
+        region.GetComponent<MeshFilter>().mesh = lowDetailMesh;
+    }
+    else
+    {
+        // 近距离：高细节
+        region.GetComponent<MeshFilter>().mesh = highDetailMesh;
+    }
+}
+```
+
+## 🐛 故障排除
+
+### 问题：脑区不显示
+
+**检查**：
+1. JSON 文件路径是否正确？
+2. 配置文件是否存在？
+3. 预制件和材质是否分配？
+
+### 问题：颜色不变化
+
+**检查**：
+1. 活动数据是否正确加载？
+2. 材质是否支持颜色变化？
+3. 着色器是否正确？
+
+### 问题：WebSocket 连接失败
+
+**检查**：
+1. Python 后端是否运行？
+   ```bash
+   python unity_automation.py --mode server
+   ```
+2. 端口是否正确（默认 8765）？
+3. 防火墙是否阻止？
+
+## 📚 示例场景
+
+### 示例 1：静态脑可视化
+
+```csharp
+// 加载单个时间点
+brain.LoadBrainState(0);
+brain.autoPlay = false;
+```
+
+### 示例 2：动画播放
+
+```csharp
+// 循环播放动画
+brain.autoPlay = true;
+brain.fps = 10f;
+brain.PlayAnimation();
+```
+
+### 示例 3：实时更新
+
+```csharp
+// 连接 WebSocket
+WebSocketClient client = GetComponent<WebSocketClient>();
+await client.Connect();
+
+client.OnMessageReceived += (message) => {
+    var state = JsonUtility.FromJson<BrainState>(message);
+    foreach (var region in state.regions)
+    {
+        brain.UpdateRegionActivity(region.id, region.activity);
+    }
+};
+```
+
+## 🔗 相关资源
+
+- [Unity 工作流说明](../docs/Unity工作流说明.md)
+- [Unity 快速开始指南](../docs/Unity快速开始指南.md)
+- [TwinBrain 系统使用指南](../docs/TwinBrain系统使用指南.md)
+
+## 📞 支持
+
+如有问题，请参考：
+- [GitHub Issues](https://github.com/sheinclotho/twinbrain/issues)
+- [文档](../docs/)
+
+---
+
+**维护者**：TwinBrain Development Team  
+**最后更新**：2026-02-04  
+**Unity 版本要求**：Unity 2021.3 LTS 或更高
