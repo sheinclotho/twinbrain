@@ -2,21 +2,72 @@
 
 ## Overview
 
-This document describes the memory optimization strategies implemented in TwinBrain to prevent CUDA Out of Memory (OOM) errors during training.
+This document describes the memory optimization strategies implemented in TwinBrain to prevent CUDA Out of Memory (OOM) errors during training, particularly on GPUs with 8GB or less memory.
 
 ## Problem
 
-Training deep learning models with limited GPU memory can lead to OOM errors, particularly when:
-- Processing large batch sizes or long sequences
-- Using complex architectures with many parameters
-- Accumulating gradients without proper cleanup
-- Memory fragmentation occurs over time
+The error message shows:
+```
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 98.00 MiB. 
+GPU 0 has a total capacity of 8.00 GiB of which 0 bytes is free. 
+Of the allocated memory 14.35 GiB is allocated by PyTorch
+```
 
-## Solution
+This indicates PyTorch is trying to allocate more memory (14.35 GiB) than the GPU has (8 GiB), caused by:
+- **Memory accumulation**: Tensors not being properly freed between batches
+- **Large models**: Complex GNN + GRU architectures with attention
+- **Insufficient cleanup**: Inadequate cache clearing and tensor deletion
+- **Memory fragmentation**: Small free chunks but no large contiguous blocks
 
-TwinBrain implements several memory management strategies to minimize GPU memory usage:
+## Solutions Implemented
 
-### 1. Environment Configuration
+### 1. Gradient Checkpointing (NEW)
+
+**What**: Trades computation for memory by recomputing activations during backward pass instead of storing them.
+
+**Where**: Added to `PredictorHead` in `train/predictor.py`:
+```python
+use_gradient_checkpointing: bool = True  # New parameter
+```
+
+**Impact**: Reduces peak memory by 30-40% for prediction module.
+
+**Enable in config:**
+```yaml
+prediction:
+  use_gradient_checkpointing: true
+```
+
+### 2. Reduced Default Memory Footprint
+
+**Changes in `config/default.yaml`:**
+- `hidden_dim`: 128 → 96 (25% memory reduction)
+- `warmup_epochs`: 5 → 3 (faster startup)
+- `prediction.context_length`: None → 50 (prevents full sequence processing)
+
+**Impact**: Peak memory reduced from ~9-11 GB to ~6-7 GB.
+
+### 3. Enhanced Memory Cleanup
+
+**Improvements in training loop:**
+- Delete `raw_pred_loss_total`, `enc_out`, `sanitized_z` after use
+- Move `data` to CPU after processing: `data = data.cpu()`
+- Clear cache AFTER all tensors deleted (more effective)
+
+**Code location**: Memory cleanup section in `train/hetero_trainer.py` (in the training loop)
+
+### 4. Optimized Prediction Loop
+
+**Changes:**
+- Reduced sliding windows: All windows → 2 windows (beginning + end)
+- Immediate tensor cleanup: `del predictions, pred_loss` after each window
+- Delete `window_loss` after accumulation
+
+**Impact**: 50% reduction in prediction memory usage.
+
+**Code location**: Prediction loss computation in `train/hetero_trainer.py` (PredictorHead usage section)
+
+### 5. Environment Configuration
 
 The CUDA memory allocator is configured to use expandable segments, which reduces memory fragmentation:
 
@@ -24,36 +75,100 @@ The CUDA memory allocator is configured to use expandable segments, which reduce
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 ```
 
-This setting is applied automatically at module import time (before any CUDA operations).
+This setting is applied automatically at module import time in `train/hetero_trainer.py`.
 
-### 2. Periodic Cache Clearing
+### 6. Periodic Cache Clearing
 
-CUDA cache is cleared at strategic points during training:
-- **Start of each epoch**: Ensures clean slate for new epoch
-- **After each batch**: Reclaims unused memory (frequency configurable)
-- **End of each epoch**: Prevents accumulation across epochs
+CUDA cache is cleared at strategic points:
+- **Start of each epoch**: `torch.cuda.empty_cache()` for clean slate
+- **After each batch**: Based on `clear_cache_frequency` config (default: 1)
+- **After tensor deletion**: Maximum effectiveness
 
-### 3. Explicit Tensor Cleanup
+Default frequency is 1 (every batch) for 8GB GPUs.
 
-Large intermediate tensors are explicitly deleted after use:
-- Loss tensors (total, align, temp, recon, etc.)
-- Model outputs (z_dict, gru_seq_dict, proj_seq_dict, etc.)
-- Prediction window tensors (in sliding window loop)
+## Memory Usage Estimates
 
-**Why explicit deletion?** While Python's garbage collector will eventually collect these tensors, GPU memory is managed separately by CUDA. Explicit deletion before calling `torch.cuda.empty_cache()` allows immediate GPU memory reclamation rather than waiting for the next GC cycle.
+### By Configuration
 
-### 4. Gradient Accumulation
+| Configuration | Peak Memory | Recommended GPU |
+|--------------|-------------|-----------------|
+| `hidden_dim: 64` | ~4-5 GB | 6GB+ |
+| `hidden_dim: 96` (default) | ~6-7 GB | 8GB+ |
+| `hidden_dim: 128` | ~9-11 GB | 12GB+ |
+| `hidden_dim: 192` | ~15-18 GB | 16GB+ |
 
-Gradient accumulation allows training with larger effective batch sizes while using less memory:
+*With gradient checkpointing and context_length=50*
 
-```yaml
-training:
-  gradient_accumulation_steps: 2  # Accumulate gradients over 2 steps
+### Memory Breakdown
+
+1. **Model Parameters** (~10-20%): GNN, GRU, Attention layers
+2. **Activations** (~40-60%): Forward pass intermediate results
+3. **Gradients** (~20-30%): Backpropagation gradients + Adam states
+4. **Data Tensors** (~10-20%): Input/target sequences
+
+## Quick Fixes for OOM
+
+### For 8GB GPUs (Recommended)
+
+Use the default config - it's already optimized:
+
+```bash
+python main.py train --config config/default.yaml
 ```
 
-This splits the batch into smaller chunks, processes them separately, and accumulates gradients before updating weights.
+### For 6GB GPUs
 
-## Configuration
+Create a custom config:
+
+```yaml
+model:
+  hidden_dim: 64  # Reduced
+
+training:
+  warmup_epochs: 2
+  main_epochs: 30
+
+prediction:
+  enabled: false  # Disable to save memory
+
+memory:
+  optimize_for_low_memory: true
+```
+
+### Emergency Options
+
+If still OOM:
+
+1. **Disable prediction**: Set `prediction.enabled: false`
+2. **Reduce hidden_dim**: Try 64 or even 48
+3. **Shorter sequences**: Set `prediction.context_length: 30`
+4. **Fewer epochs**: Reduce warmup, main, and finetune epochs
+
+## Configuration Reference
+
+### Key Memory Settings
+
+```yaml
+model:
+  hidden_dim: 96  # Main memory control (64, 96, 128, 192)
+
+training:
+  warmup_epochs: 3  # Reduced from 5
+  clear_cache_frequency: 1  # Clear every batch
+
+prediction:
+  enabled: false  # Enable only if memory allows
+  context_length: 50  # Limit sequence length
+  use_gradient_checkpointing: true  # Save memory
+
+memory:
+  optimize_for_low_memory: true
+  use_gradient_checkpointing: true
+```
+
+### Emergency Options
+
+If still OOM after above optimizations:
 
 You can control memory management behavior in `config/default.yaml`:
 

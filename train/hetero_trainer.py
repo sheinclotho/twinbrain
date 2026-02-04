@@ -324,10 +324,12 @@ class DynamicHeteroTrainer:
                     num_layers=3,
                     num_heads=8,
                     dropout=self.dropout,
-                    use_residual=True
+                    use_residual=True,
+                    use_gradient_checkpointing=True  # Enable gradient checkpointing for memory efficiency
                 ).to(self.device)
                 context_info = f"context={self.prediction_context_length}" if self.prediction_context_length else "full sequence"
                 self.logger.info(f"Predictor enabled: use {context_info} to predict {self.prediction_steps} steps ahead")
+                self.logger.info("  ✓ Gradient checkpointing enabled for memory efficiency")
             except ImportError:
                 self.logger.warning("Failed to import PredictorHead, prediction disabled")
                 self.enable_prediction = False
@@ -771,23 +773,31 @@ class DynamicHeteroTrainer:
                         if T < min_required:
                             continue
                         
-                        # Use sliding window to create multiple training samples
-                        # This enables autoregressive learning across the sequence
+                        # Use fewer sliding windows to reduce memory usage
+                        # Process only 2-3 windows per sequence to minimize memory footprint
                         context_len = self.prediction_context_length or 50
-                        stride = max(1, self.prediction_steps // 2)  # Overlap windows for more samples
+                        
+                        # Calculate positions for 2-3 evenly-spaced windows
+                        max_start = T - context_len - self.prediction_steps
+                        if max_start <= 0:
+                            continue
+                            
+                        # Use only 2 windows: beginning and end of sequence
+                        # Sort to ensure proper ordering for loop control
+                        window_starts = sorted([0, max_start])
                         
                         num_windows = 0
                         window_loss = torch.tensor(0.0, device=self.device)
                         
-                        # Slide window across the sequence
-                        for start_idx in range(0, T - context_len - self.prediction_steps + 1, stride):
+                        # Process only selected windows to reduce memory
+                        for start_idx in window_starts:
                             context_start = start_idx
                             context_end = start_idx + context_len
                             target_start = context_end
                             target_end = context_end + self.prediction_steps
                             
                             if target_end > T:
-                                break
+                                break  # This and any subsequent windows don't fit
                             
                             # Extract context and target
                             context_seq = seq[:, context_start:context_end, :]
@@ -801,15 +811,18 @@ class DynamicHeteroTrainer:
                             window_loss = window_loss + pred_loss
                             num_windows += 1
                             
-                            # Clean up intermediate tensors to free memory
+                            # Clean up intermediate tensors immediately to free memory
                             del predictions, pred_loss, context_seq, target_seq
                         
                         # Average over all windows
                         if num_windows > 0:
-                            predictor_loss = predictor_loss + (window_loss / num_windows)
+                            avg_window_loss = window_loss / num_windows
+                            predictor_loss = predictor_loss + avg_window_loss
+                            # Clean up window loss tensor
+                            del window_loss
                             # Log window count on first batch to show prediction is active
                             if data_idx == 0 and epoch % 10 == 0 and verbose:
-                                self.logger.info(f"  [{nt}] Trained on {num_windows} prediction windows (MSE={window_loss/num_windows:.6f})")
+                                self.logger.info(f"  [{nt}] Trained on {num_windows} prediction windows (avg loss: {float(avg_window_loss):.6f})")
 
                 for nt in self.metadata[0]:
                     seq = None
@@ -1073,17 +1086,29 @@ class DynamicHeteroTrainer:
                 # torch.cuda.empty_cache() allows CUDA to reclaim GPU memory immediately
                 # rather than waiting for the next GC cycle. This is critical for preventing OOM.
                 del loss, align_loss, temp_loss, recon_loss, recon_norm_loss, spec_loss_total
+                # Conditionally delete raw_pred_loss_total if it was computed
+                try:
+                    if raw_pred_loss_total.numel() != 0:
+                        del raw_pred_loss_total
+                except (NameError, AttributeError):
+                    pass  # Variable doesn't exist or already deleted
                 if self.enable_prediction:
                     del predictor_loss
                 # Delete other large tensors
                 del z_dict, gru_seq_dict, proj_seq_dict, recon_seq_dict, recon_seq_scaled
                 del global_seq, recon_feature_dict, recon_denorm_dict, recon_final_map
+                # Delete encoded tensors
+                del x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict, enc_out
+                # Delete sanitized tensors
+                del sanitized_z
+                # Move data back to CPU to free GPU memory before next iteration
+                data = data.cpu()
 
                 if data_idx == 0 and verbose:
                     self.logger.info(f"[Train] epoch={epoch} batch=0 recon_losses={recon_losses_per_nt}")
                 
-                # Clear CUDA cache periodically to prevent memory fragmentation
-                # Only clear every N batches based on clear_cache_frequency setting
+                # Clear CUDA cache after all tensors are deleted for maximum effectiveness
+                # This is critical for preventing memory fragmentation on small GPUs
                 if torch.cuda.is_available() and (data_idx + 1) % self.clear_cache_frequency == 0:
                     torch.cuda.empty_cache()
 
