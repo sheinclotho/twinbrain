@@ -1096,7 +1096,8 @@ class DynamicHeteroTrainer:
                     del predictor_loss
                 # Delete other large tensors
                 del z_dict, gru_seq_dict, proj_seq_dict, recon_seq_dict, recon_seq_scaled
-                del global_seq, recon_feature_dict, recon_denorm_dict, recon_final_map
+                del global_seq, recon_feature_dict, recon_denorm_dict
+                # DO NOT delete recon_final_map - save it for epoch-level metrics
                 # Delete encoded tensors
                 del x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict, enc_out
                 # Delete sanitized tensors
@@ -1149,8 +1150,16 @@ class DynamicHeteroTrainer:
             rel_error_epoch: Dict[str, float] = {}
             try:
                 rel_error_epoch = self._compute_relative_error(recon_final_map, data, self.metadata)
-            except Exception:
-                self.logger.warning("[Train] relative error computation failed for this epoch")
+            except Exception as e:
+                import traceback
+                self.logger.warning(f"[Train] relative error computation failed for this epoch: {e}")
+                self.logger.debug(traceback.format_exc())
+            finally:
+                # Clean up recon_final_map after use to free memory
+                try:
+                    del recon_final_map
+                except NameError:
+                    pass  # recon_final_map was not defined
 
             # New: Log metrics
             if self.metrics_tracker is not None:

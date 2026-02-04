@@ -1,5 +1,40 @@
 # TwinBrain 更新历史
 
+## 2026-02-04 (训练稳定性修复和文档清理)
+
+### 相对误差计算修复 🔧
+
+#### 问题描述
+- 训练过程中出现警告: "[Train] relative error computation failed for this epoch"
+- 错误频繁出现但没有详细的错误信息
+- 影响训练指标的完整性
+
+#### 根本原因
+- `recon_final_map` 在每个 batch 结束时被删除
+- 但在 epoch 结束后需要使用它计算相对误差
+- 导致 `NameError` 或 `UnboundLocalError`
+- 异常处理不完善，缺少详细的错误信息
+
+#### 解决方案
+1. **保留 recon_final_map**: 在 batch 清理时不删除 recon_final_map，保留用于 epoch 级别指标计算
+2. **改进错误日志**: 添加详细的异常信息和堆栈跟踪
+3. **内存清理**: 在使用后通过 finally 块清理 recon_final_map
+
+### 文档清理 📚
+
+#### 清理内容
+- 移除过时的修复总结文档:
+  - `CUDA_OOM_FIX_SUMMARY.md`
+  - `PREDICTION_FIX_SUMMARY.md`
+  - `V2实现总结.md`
+  - `完成报告.md`
+- 保留核心文档:
+  - `README.md` / `README_CN.md`
+  - `CHANGELOG.md`
+  - `OPTIMIZATION_DIRECTIONS.md`
+
+---
+
 ## 2026-02-04 (训练稳定性修复)
 
 ### 关键修复：训练静滞问题 🔧
