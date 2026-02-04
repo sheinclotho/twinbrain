@@ -119,9 +119,6 @@ memory:
   # Gradient checkpointing
   use_gradient_checkpointing: true  # Enable gradient checkpointing for GRU/attention
   
-  # Context length limits (prevent OOM on long sequences)
-  max_sequence_length: 200  # Maximum sequence length to process at once
-  
   # Tips for 8GB GPU:
   # - Keep hidden_dim <= 96
   # - Set prediction.context_length <= 50

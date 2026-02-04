@@ -54,7 +54,7 @@ prediction:
 - Move `data` to CPU after processing: `data = data.cpu()`
 - Clear cache AFTER all tensors deleted (more effective)
 
-**Code location**: `train/hetero_trainer.py` lines 1070-1095
+**Code location**: Memory cleanup section in `train/hetero_trainer.py` (in the training loop)
 
 ### 4. Optimized Prediction Loop
 
@@ -65,7 +65,7 @@ prediction:
 
 **Impact**: 50% reduction in prediction memory usage.
 
-**Code location**: `train/hetero_trainer.py` lines 752-830
+**Code location**: Prediction loss computation in `train/hetero_trainer.py` (PredictorHead usage section)
 
 ### 5. Environment Configuration
 

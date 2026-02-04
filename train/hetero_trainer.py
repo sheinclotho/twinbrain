@@ -796,7 +796,7 @@ class DynamicHeteroTrainer:
                             target_end = context_end + self.prediction_steps
                             
                             if target_end > T:
-                                continue
+                                break  # If this window doesn't fit, no subsequent windows will fit either
                             
                             # Extract context and target
                             context_seq = seq[:, context_start:context_end, :]
@@ -1083,7 +1083,9 @@ class DynamicHeteroTrainer:
                 # While Python GC will eventually collect these, explicit deletion before
                 # torch.cuda.empty_cache() allows CUDA to reclaim GPU memory immediately
                 # rather than waiting for the next GC cycle. This is critical for preventing OOM.
-                del loss, align_loss, temp_loss, recon_loss, recon_norm_loss, spec_loss_total, raw_pred_loss_total
+                del loss, align_loss, temp_loss, recon_loss, recon_norm_loss, spec_loss_total
+                if raw_pred_loss_total.numel() != 0:  # Only delete if it exists and is non-empty
+                    del raw_pred_loss_total
                 if self.enable_prediction:
                     del predictor_loss
                 # Delete other large tensors

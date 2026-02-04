@@ -17,6 +17,7 @@ torch.manual_seed(_INIT_SEED)
 
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from typing import Optional, Tuple
 
 
@@ -124,7 +125,6 @@ class PredictorHead(nn.Module):
         # Initialize with context sequence
         # Use gradient checkpointing for memory efficiency during training
         if self.use_gradient_checkpointing and self.training:
-            from torch.utils.checkpoint import checkpoint
             # Wrap GRU call in checkpoint to reduce memory usage
             _, hidden = checkpoint(self.predictor_gru, context_seq, use_reentrant=False)
         else:
@@ -141,7 +141,6 @@ class PredictorHead(nn.Module):
             # Predict next step with GRU
             # Use gradient checkpointing for memory efficiency
             if self.use_gradient_checkpointing and self.training:
-                from torch.utils.checkpoint import checkpoint
                 pred, hidden = checkpoint(
                     lambda c, h: self.predictor_gru(c, h),
                     current, hidden,
