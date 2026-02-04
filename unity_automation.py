@@ -49,7 +49,9 @@ class UnityAutomation:
         self,
         output_dir: str = "unity_output",
         brain_data_path: Optional[str] = None,
-        use_example_data: bool = True
+        use_example_data: bool = True,
+        use_freesurfer: bool = False,
+        freesurfer_files: Optional[Dict[str, str]] = None
     ):
         """
         初始化自动化管理器
@@ -58,10 +60,14 @@ class UnityAutomation:
             output_dir: 输出目录
             brain_data_path: 脑数据路径（如果有）
             use_example_data: 是否使用示例数据
+            use_freesurfer: 是否使用FreeSurfer数据
+            freesurfer_files: FreeSurfer文件路径字典
         """
         self.output_dir = Path(output_dir)
         self.brain_data_path = brain_data_path
         self.use_example_data = use_example_data
+        self.use_freesurfer = use_freesurfer
+        self.freesurfer_files = freesurfer_files or {}
         self.results = {}
     
     def run_complete_workflow(self):
@@ -105,7 +111,10 @@ class UnityAutomation:
     
     def _step_prepare_data(self):
         """步骤1: 准备数据"""
-        if self.use_example_data:
+        if self.use_freesurfer:
+            logger.info("  使用FreeSurfer表面数据...")
+            self.data_source = "freesurfer"
+        elif self.use_example_data:
             logger.info("  使用示例数据...")
             self.data_source = "example"
         elif self.brain_data_path:
@@ -119,22 +128,34 @@ class UnityAutomation:
     def _step_export_data(self):
         """步骤2: 导出数据"""
         # 配置导出
-        config = WorkflowConfig(
-            data_source=self.data_source,
-            data_path=self.brain_data_path,
-            output_dir=str(self.output_dir),
-            export_formats=['json', 'obj'],
-            start_time=0,
-            end_time=200,
-            time_step=5,
-            export_connectivity=True,
-            export_networks=True,
-            export_obj_per_frame=False,
-            generate_unity_config=True,
-            generate_materials=True,
-            subject_id="twinbrain_demo",
-            atlas_name="Schaefer200"
-        )
+        config_params = {
+            'data_source': self.data_source,
+            'data_path': self.brain_data_path,
+            'output_dir': str(self.output_dir),
+            'export_formats': ['json', 'obj'],
+            'start_time': 0,
+            'end_time': 200,
+            'time_step': 5,
+            'export_connectivity': True,
+            'export_networks': True,
+            'export_obj_per_frame': False,
+            'generate_unity_config': True,
+            'generate_materials': True,
+            'subject_id': "twinbrain_demo",
+            'atlas_name': "Schaefer200"
+        }
+        
+        # Add FreeSurfer specific parameters if using FreeSurfer data
+        if self.data_source == "freesurfer":
+            config_params.update({
+                'freesurfer_lh_surface': self.freesurfer_files.get('lh_surface'),
+                'freesurfer_rh_surface': self.freesurfer_files.get('rh_surface'),
+                'freesurfer_lh_annot': self.freesurfer_files.get('lh_annot'),
+                'freesurfer_rh_annot': self.freesurfer_files.get('rh_annot'),
+                'export_surface_mesh': self.freesurfer_files.get('export_surface', False)
+            })
+        
+        config = WorkflowConfig(**config_params)
         
         logger.info("  运行Unity工作流...")
         self.results['workflow'] = run_unity_workflow(config)
@@ -1241,6 +1262,39 @@ def main():
         help='脑数据路径（可选）'
     )
     
+    # FreeSurfer specific arguments
+    parser.add_argument(
+        '--freesurfer',
+        action='store_true',
+        help='使用FreeSurfer表面文件'
+    )
+    
+    parser.add_argument(
+        '--lh-surface',
+        help='左半球表面文件路径 (e.g., lh.pial)'
+    )
+    
+    parser.add_argument(
+        '--rh-surface',
+        help='右半球表面文件路径 (e.g., rh.pial)'
+    )
+    
+    parser.add_argument(
+        '--lh-annot',
+        help='左半球注释文件路径 (e.g., lh.Schaefer2018_200Parcels_7Networks_order.annot)'
+    )
+    
+    parser.add_argument(
+        '--rh-annot',
+        help='右半球注释文件路径 (e.g., rh.Schaefer2018_200Parcels_7Networks_order.annot)'
+    )
+    
+    parser.add_argument(
+        '--export-surface',
+        action='store_true',
+        help='导出FreeSurfer表面网格为OBJ'
+    )
+    
     parser.add_argument(
         '--port',
         type=int,
@@ -1257,11 +1311,33 @@ def main():
     
     args = parser.parse_args()
     
+    # Prepare FreeSurfer files if specified
+    freesurfer_files = None
+    if args.freesurfer:
+        # Validate that all FreeSurfer files are provided
+        if not all([args.lh_surface, args.rh_surface, args.lh_annot, args.rh_annot]):
+            logger.error("使用 --freesurfer 时，必须提供所有FreeSurfer文件：")
+            logger.error("  --lh-surface (左半球表面)")
+            logger.error("  --rh-surface (右半球表面)")
+            logger.error("  --lh-annot (左半球注释)")
+            logger.error("  --rh-annot (右半球注释)")
+            return 1
+        
+        freesurfer_files = {
+            'lh_surface': args.lh_surface,
+            'rh_surface': args.rh_surface,
+            'lh_annot': args.lh_annot,
+            'rh_annot': args.rh_annot,
+            'export_surface': args.export_surface
+        }
+    
     # 创建自动化实例
     automation = UnityAutomation(
         output_dir=args.output,
         brain_data_path=args.data_path,
-        use_example_data=args.use_example
+        use_example_data=args.use_example and not args.freesurfer,
+        use_freesurfer=args.freesurfer,
+        freesurfer_files=freesurfer_files
     )
     
     try:
