@@ -7,14 +7,20 @@
 - 🔮 大脑未来状态预测（✅ 新增）
 - 📊 增强训练监控系统（✅ 新增）
 - 🎯 虚拟刺激和扰动模拟
-- 🌐 Unity前端实时可视化
+- 🌐 Unity前端实时可视化（✅ 全面增强）
 - 📈 异构图神经网络建模
 
 ## 📚 文档
 
+### 快速开始
+- **[Unity快速开始指南](docs/Unity快速开始指南.md)** - 5分钟快速上手Unity可视化 🆕
+- **[Unity Quick Start (English)](docs/Unity_Quick_Start.md)** - Get started in 5 minutes 🆕
+
 ### 中文文档（推荐）
 - **[系统使用指南](docs/TwinBrain系统使用指南.md)** - 完整的用户指南：安装、配置、训练、预测、Unity集成
-- **[新功能说明](docs/NEW_FEATURES.md)** - 最新功能详解（2026-02-01）🆕
+- **[Unity工作流说明](docs/Unity工作流说明.md)** - Unity集成详细说明
+- **[Unity更新说明](docs/Unity更新说明.md)** - Unity功能更新记录
+- **[新功能说明](docs/NEW_FEATURES.md)** - 最新功能详解（2026-02-01）
 - **[优化方向和研究思路](OPTIMIZATION_DIRECTIONS.md)** - 研究方向、优化策略、未来规划
 
 ### 项目文档
@@ -22,20 +28,49 @@
 
 ## 🚀 快速开始
 
-### 1. 安装依赖
+### Unity可视化（推荐新用户）
+
+一键生成Unity可视化资源：
 
 ```bash
-pip install -r requirements.txt
+# 生成所有Unity资源
+python unity_automation.py --mode export
+
+# 启动后端服务器（可选，用于实时功能）
+python unity_automation.py --mode server
+
+# 完整流程（生成资源 + 启动服务器）
+python unity_automation.py --mode all
 ```
 
-### 2. 训练模型
+详细步骤请参考 **[Unity快速开始指南](docs/Unity快速开始指南.md)**
+
+### 训练模型
 
 ```bash
+# 安装依赖
+pip install -r requirements.txt
+
 # 使用默认配置训练（推荐）
 python main.py train --config config/default.yaml
 ```
 
-### 3. 导出大脑状态（Unity可视化）
+### 导出大脑状态（Unity可视化）
+
+**使用一键式脚本（推荐）:**
+
+```bash
+# 生成所有必要文件
+python unity_automation.py --mode export
+
+# 输出目录: unity_output/
+#   ├── json/          # JSON脑状态
+#   ├── obj/           # 3D模型
+#   ├── UnityScripts/  # C#脚本
+#   └── README_UNITY.md # 使用说明
+```
+
+**手动导出:**
 
 ```python
 from unity_integration import BrainStateExporter
@@ -57,7 +92,9 @@ exporter.export_sequence(
 )
 ```
 
-### 4. 模拟虚拟刺激
+详细说明请参考 [Unity快速开始指南](docs/Unity快速开始指南.md) 或 [Unity工作流说明](docs/Unity工作流说明.md)
+
+### 模拟虚拟刺激
 
 ```python
 from unity_integration import StimulationSimulator, StimulationConfig
