@@ -190,6 +190,8 @@ class TrainingWorkflow:
             metrics_output_dir=str(result_dir / cfg.get('metrics.output_dir', 'metrics')),
             # New: gradient accumulation
             gradient_accumulation_steps=cfg.get('training.gradient_accumulation_steps', 1),
+            # New: CUDA cache clearing frequency
+            clear_cache_frequency=cfg.get('training.clear_cache_frequency', 1),
             # Note: device is automatically detected in DynamicHeteroTrainer.__init__
         )
         

@@ -113,6 +113,7 @@ class DynamicHeteroTrainer:
         enable_metrics_tracking: bool = True,
         metrics_output_dir: Optional[str] = None,
         gradient_accumulation_steps: int = 1,  # NEW: Gradient accumulation
+        clear_cache_frequency: int = 1,  # NEW: Clear CUDA cache every N batches (1=every batch)
     ):
         # ---------- Early random seed initialization (runtime call) ----------
         # NOTE: Module-level seed initialization has ALREADY occurred (lines 13-20)
@@ -211,6 +212,9 @@ class DynamicHeteroTrainer:
         
         # New: gradient accumulation
         self.gradient_accumulation_steps = max(1, int(gradient_accumulation_steps))
+        
+        # New: CUDA cache clearing frequency
+        self.clear_cache_frequency = max(1, int(clear_cache_frequency))
 
         # New: metrics tracking
         self.enable_metrics_tracking = bool(enable_metrics_tracking)
@@ -1074,7 +1078,8 @@ class DynamicHeteroTrainer:
                     self.logger.info(f"[Train] epoch={epoch} batch=0 recon_losses={recon_losses_per_nt}")
                 
                 # Clear CUDA cache periodically to prevent memory fragmentation
-                if torch.cuda.is_available():
+                # Only clear every N batches based on clear_cache_frequency setting
+                if torch.cuda.is_available() and (data_idx + 1) % self.clear_cache_frequency == 0:
                     torch.cuda.empty_cache()
 
             if batches == 0:
