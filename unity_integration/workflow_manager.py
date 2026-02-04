@@ -533,8 +533,22 @@ class WorkflowManager:
         n_timepoints = self.config.end_time or 200
         n_features = 1
         
-        # Generate example activity data (in real use, this would come from actual data)
+        # NOTE: This generates PLACEHOLDER activity data for demonstration
+        # In real usage, you should replace this with actual brain activity data:
+        # 
+        # Example for loading real data:
+        # -----------------------------
+        # fmri_data = load_your_fmri_data()  # Shape: [n_regions, n_timepoints, n_features]
+        # eeg_data = load_your_eeg_data()    # Shape: [n_regions, n_timepoints, n_features]
+        # 
+        # Data format requirements:
+        # - fmri_data: torch.Tensor, shape [n_regions, n_timepoints, features]
+        # - eeg_data: torch.Tensor, shape [n_regions, n_timepoints, features]
+        # - Values should be normalized (e.g., z-scored)
+        # - n_regions must match the number of regions in FreeSurfer atlas
+        # 
         self.logger.info("生成示例活动数据（实际使用时应加载真实数据）...")
+        self.logger.info(f"  需要加载: [{n_regions} regions, {n_timepoints} timepoints, {n_features} features]")
         fmri_data = torch.randn(n_regions, n_timepoints, n_features)
         eeg_data = torch.randn(n_regions, n_timepoints, n_features)
         
@@ -544,8 +558,11 @@ class WorkflowManager:
         }
         
         # Generate example connectivity matrix
+        # In real usage, load actual structural or functional connectivity:
+        # connectivity_matrix = load_your_connectivity_data()  # Shape: [n_regions, n_regions]
         connectivity_matrix = np.random.rand(n_regions, n_regions)
         connectivity_matrix = (connectivity_matrix + connectivity_matrix.T) / 2
+        # Threshold at 0.7 to keep only strong connections (adjust based on your data)
         connectivity_matrix[connectivity_matrix < 0.7] = 0
         
         connectivity = {

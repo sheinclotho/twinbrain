@@ -119,15 +119,18 @@ class FreeSurferLoader:
         vertices = self.surfaces[hemisphere]['vertices']
         labels = self.annotations[hemisphere]['labels']
         names = self.annotations[hemisphere]['names']
+        ctab = self.annotations[hemisphere]['ctab']
         
         centroids = []
         
         # Compute centroid for each region
-        for region_idx, region_name in enumerate(names):
-            # Get vertices belonging to this region
-            # labels array contains the color-table index for each vertex
-            # We need to find vertices with this specific label
-            region_vertices = vertices[labels == region_idx]
+        # FreeSurfer labels array contains color-table indices per vertex
+        # ctab rows correspond to region indices
+        for region_idx in range(len(names)):
+            # Find vertices that belong to this region
+            # The labels array contains indices into the color table
+            region_mask = (labels == region_idx)
+            region_vertices = vertices[region_mask]
             
             if len(region_vertices) > 0:
                 # Compute centroid as mean of all vertices in region
@@ -135,6 +138,7 @@ class FreeSurferLoader:
                 centroids.append(centroid)
             else:
                 # If no vertices found, use origin (shouldn't happen normally)
+                region_name = names[region_idx]
                 self.logger.warning(f"No vertices found for region {region_name}")
                 centroids.append(np.array([0, 0, 0]))
         
@@ -212,7 +216,7 @@ class FreeSurferLoader:
             # Add each region to atlas info
             for region_idx, (region_name, centroid) in enumerate(zip(names, centroids)):
                 # Skip background/unknown regions (usually index 0)
-                if region_name.lower() in ['unknown', 'corpuscallosum', '???']:
+                if region_name.lower() in ['unknown', 'corpus_callosum', 'corpuscallosum', '???']:
                     continue
                 
                 # Get color from color table

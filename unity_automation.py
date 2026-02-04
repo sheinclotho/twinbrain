@@ -1311,6 +1311,10 @@ def main():
     
     args = parser.parse_args()
     
+    # Validate mutually exclusive options
+    if args.freesurfer and args.use_example:
+        logger.warning("⚠️  --freesurfer 和 --use-example 同时指定，将使用 FreeSurfer 数据")
+    
     # Prepare FreeSurfer files if specified
     freesurfer_files = None
     if args.freesurfer:
@@ -1332,6 +1336,7 @@ def main():
         }
     
     # 创建自动化实例
+    # Note: FreeSurfer takes precedence over use_example when both are specified
     automation = UnityAutomation(
         output_dir=args.output,
         brain_data_path=args.data_path,
