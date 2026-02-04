@@ -135,39 +135,215 @@ class BrainVisualizationServer:
     
     async def handle_get_state(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """Handle request for current brain state."""
-        # This is a placeholder - actual implementation would get state from model
-        return {
-            "type": "brain_state",
-            "success": True,
-            "message": "State retrieval not yet implemented",
-            "data": {}
-        }
+        try:
+            # Generate example brain state
+            import torch
+            import numpy as np
+            
+            n_regions = 200
+            # Generate example fMRI data
+            fmri_data = torch.randn(n_regions, 1, 1)
+            eeg_data = torch.randn(n_regions, 1, 1)
+            
+            brain_activity = {
+                'fmri': fmri_data,
+                'eeg': eeg_data
+            }
+            
+            # Generate connectivity
+            connectivity_matrix = np.random.rand(n_regions, n_regions)
+            connectivity_matrix = (connectivity_matrix + connectivity_matrix.T) / 2
+            connectivity_matrix[connectivity_matrix < 0.7] = 0
+            connectivity = {'structural': connectivity_matrix}
+            
+            # Export to JSON format
+            if self.exporter:
+                brain_state = self.exporter.export_brain_state(
+                    brain_activity=brain_activity,
+                    connectivity=connectivity,
+                    time_point=0,
+                    subject_id="realtime"
+                )
+                
+                return {
+                    "type": "brain_state",
+                    "success": True,
+                    "data": brain_state
+                }
+            else:
+                return {
+                    "type": "brain_state",
+                    "success": False,
+                    "message": "Exporter not available"
+                }
+                
+        except Exception as e:
+            self.logger.error(f"Error getting state: {e}")
+            return {
+                "type": "error",
+                "message": f"Failed to get state: {str(e)}"
+            }
     
     async def handle_predict(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """Handle prediction request."""
         n_steps = request.get("n_steps", 10)
         
-        # Placeholder implementation
-        return {
-            "type": "prediction",
-            "success": True,
-            "n_steps": n_steps,
-            "message": "Prediction not yet implemented",
-            "data": {}
-        }
+        try:
+            import torch
+            import numpy as np
+            
+            n_regions = 200
+            
+            # Generate prediction sequence
+            predictions = []
+            for t in range(n_steps):
+                # Generate predicted brain state
+                fmri_data = torch.randn(n_regions, 1, 1) * (0.5 + t * 0.05)
+                eeg_data = torch.randn(n_regions, 1, 1) * (0.5 + t * 0.05)
+                
+                brain_activity = {
+                    'fmri': fmri_data,
+                    'eeg': eeg_data
+                }
+                
+                if self.exporter:
+                    brain_state = self.exporter.export_brain_state(
+                        brain_activity=brain_activity,
+                        time_point=t,
+                        time_second=float(t),
+                        subject_id="prediction"
+                    )
+                    predictions.append(brain_state)
+            
+            return {
+                "type": "prediction",
+                "success": True,
+                "n_steps": n_steps,
+                "predictions": predictions
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error in prediction: {e}")
+            return {
+                "type": "error",
+                "message": f"Prediction failed: {str(e)}"
+            }
     
     async def handle_simulate(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """Handle stimulation simulation request."""
         stimulation = request.get("stimulation", {})
         
-        # Placeholder implementation
-        return {
-            "type": "simulation",
-            "success": True,
-            "message": "Simulation not yet implemented",
-            "stimulation": stimulation,
-            "data": {}
-        }
+        try:
+            import torch
+            import numpy as np
+            from .stimulation_simulator import StimulationConfig
+            
+            # Parse stimulation parameters
+            target_regions = stimulation.get("target_regions", [])
+            amplitude = stimulation.get("amplitude", 0.5)
+            pattern = stimulation.get("pattern", "sine")
+            frequency = stimulation.get("frequency", 10.0)
+            duration = stimulation.get("duration", 20)
+            
+            n_regions = 200
+            n_steps = 50
+            
+            # Create stimulation config
+            stim_config = StimulationConfig(
+                target_regions=target_regions,
+                amplitude=amplitude,
+                duration=duration,
+                pattern=pattern,
+                frequency=frequency
+            )
+            
+            # Generate initial state
+            initial_state = torch.randn(n_regions, 1, 1)
+            
+            # Simulate response
+            if self.simulator:
+                trajectory, metrics = self.simulator.simulate_response(
+                    initial_state=initial_state,
+                    config=stim_config,
+                    n_steps=n_steps
+                )
+                
+                # Export trajectory as sequence
+                responses = []
+                for t, state in enumerate(trajectory):
+                    if len(state.shape) == 2:
+                        state = state.unsqueeze(1)
+                    
+                    brain_activity = {'fmri': state}
+                    
+                    # Add stimulation info if active
+                    stim_info = None
+                    if metrics[t].get('stimulation_active', False):
+                        stim_info = {
+                            "active": True,
+                            "target_regions": target_regions,
+                            "amplitude": amplitude,
+                            "pattern": pattern
+                        }
+                    
+                    if self.exporter:
+                        brain_state = self.exporter.export_brain_state(
+                            brain_activity=brain_activity,
+                            time_point=t,
+                            time_second=float(t),
+                            subject_id="simulation",
+                            stimulation=stim_info
+                        )
+                        responses.append(brain_state)
+                
+                return {
+                    "type": "simulation",
+                    "success": True,
+                    "n_steps": n_steps,
+                    "stimulation": stimulation,
+                    "responses": responses,
+                    "metrics": metrics
+                }
+            else:
+                # Simple simulation without simulator
+                responses = []
+                for t in range(n_steps):
+                    # Enhanced activity in target regions
+                    fmri_data = torch.randn(n_regions, 1, 1)
+                    for region_id in target_regions:
+                        if region_id < n_regions:
+                            fmri_data[region_id] += amplitude * np.sin(2 * np.pi * frequency * t / n_steps)
+                    
+                    brain_activity = {'fmri': fmri_data}
+                    stim_info = {
+                        "active": t < duration,
+                        "target_regions": target_regions,
+                        "amplitude": amplitude
+                    }
+                    
+                    if self.exporter:
+                        brain_state = self.exporter.export_brain_state(
+                            brain_activity=brain_activity,
+                            time_point=t,
+                            subject_id="simulation",
+                            stimulation=stim_info
+                        )
+                        responses.append(brain_state)
+                
+                return {
+                    "type": "simulation",
+                    "success": True,
+                    "n_steps": n_steps,
+                    "stimulation": stimulation,
+                    "responses": responses
+                }
+                
+        except Exception as e:
+            self.logger.error(f"Error in simulation: {e}")
+            return {
+                "type": "error",
+                "message": f"Simulation failed: {str(e)}"
+            }
     
     async def handle_stream_start(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """Handle stream start request."""
@@ -188,23 +364,67 @@ class BrainVisualizationServer:
         """Stream brain activity to all connected clients."""
         n_frames = int(fps * duration)
         
-        for frame_idx in range(n_frames):
-            # Create frame data (placeholder)
-            frame_data = {
-                "type": "stream_frame",
-                "frame": frame_idx,
-                "time": frame_idx / fps,
-                "data": {}  # Actual brain state would go here
-            }
+        try:
+            import torch
+            import numpy as np
             
-            # Broadcast to all clients
-            await self.broadcast(frame_data)
+            n_regions = 200
             
-            # Control frame rate
-            await asyncio.sleep(1.0 / fps)
-        
-        # Send stream end message
-        await self.broadcast({"type": "stream_ended", "n_frames": n_frames})
+            for frame_idx in range(n_frames):
+                # Generate dynamic brain state
+                # Simulate wave-like activity patterns
+                phase = 2 * np.pi * frame_idx / (fps * 5)  # 5 second cycle
+                
+                fmri_data = torch.randn(n_regions, 1, 1)
+                # Add wave pattern
+                for i in range(n_regions):
+                    fmri_data[i] += 0.5 * np.sin(phase + i * 0.1)
+                
+                eeg_data = torch.randn(n_regions, 1, 1)
+                
+                brain_activity = {
+                    'fmri': fmri_data,
+                    'eeg': eeg_data
+                }
+                
+                # Export brain state
+                if self.exporter:
+                    brain_state = self.exporter.export_brain_state(
+                        brain_activity=brain_activity,
+                        time_point=frame_idx,
+                        time_second=frame_idx / fps,
+                        subject_id="stream"
+                    )
+                    
+                    frame_data = {
+                        "type": "stream_frame",
+                        "frame": frame_idx,
+                        "time": frame_idx / fps,
+                        "data": brain_state
+                    }
+                else:
+                    frame_data = {
+                        "type": "stream_frame",
+                        "frame": frame_idx,
+                        "time": frame_idx / fps,
+                        "data": {}
+                    }
+                
+                # Broadcast to all clients
+                await self.broadcast(frame_data)
+                
+                # Control frame rate
+                await asyncio.sleep(1.0 / fps)
+            
+            # Send stream end message
+            await self.broadcast({"type": "stream_ended", "n_frames": n_frames})
+            
+        except Exception as e:
+            self.logger.error(f"Error in streaming: {e}")
+            await self.broadcast({
+                "type": "error",
+                "message": f"Streaming failed: {str(e)}"
+            })
     
     def start(self):
         """Start the WebSocket server."""

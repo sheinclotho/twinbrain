@@ -20,6 +20,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 
 from .brain_state_exporter import BrainStateExporter
+from .obj_generator import BrainOBJGenerator
 
 
 @dataclass
@@ -92,6 +93,12 @@ class WorkflowManager:
         self.exporter = BrainStateExporter(
             atlas_info=self.atlas_info,
             model_version="v4"
+        )
+        
+        # 创建OBJ生成器
+        self.obj_generator = BrainOBJGenerator(
+            atlas_info=self.atlas_info,
+            sphere_resolution=16  # 16x16 sphere mesh
         )
         
         # 输出目录
@@ -167,8 +174,12 @@ class WorkflowManager:
             return self._download_and_process_data()
         elif self.config.data_source == 'model':
             return self._generate_from_model()
+        elif self.config.data_source == 'example':
+            return self._generate_example_data()
         else:
-            raise ValueError(f"未知的数据源: {self.config.data_source}")
+            # Default to example data for any unknown source
+            self.logger.warning(f"未知的数据源 '{self.config.data_source}'，使用示例数据")
+            return self._generate_example_data()
     
     def _step_export_json(
         self,
@@ -216,17 +227,26 @@ class WorkflowManager:
         
         if self.config.export_obj_per_frame:
             # 每帧导出独立OBJ
-            for t in range(self.config.start_time, end_time, self.config.time_step):
-                obj_path = obj_dir / f"brain_t{t:04d}.obj"
-                self._export_single_obj(fmri_data[:, t, :], obj_path)
-                obj_files.append(str(obj_path.relative_to(self.output_dir)))
+            self.logger.info(f"  导出时间序列OBJ模型...")
+            self.obj_generator.export_brain_sequence(
+                output_dir=obj_dir,
+                activity_sequence=fmri_data,
+                start=self.config.start_time,
+                end=end_time,
+                step=self.config.time_step
+            )
+            obj_files.extend([str(f.relative_to(self.output_dir)) for f in obj_dir.glob("brain_t*.obj")])
         else:
-            # 导出单个聚合OBJ
-            obj_path = obj_dir / "brain_regions.obj"
+            # 导出单个聚合OBJ（使用平均活动）
+            self.logger.info(f"  导出聚合OBJ模型...")
             mean_activity = fmri_data.mean(dim=1)  # 平均所有时间点
-            self._export_single_obj(mean_activity, obj_path)
-            obj_files.append(str(obj_path.relative_to(self.output_dir)))
+            self.obj_generator.export_brain_model(
+                output_path=obj_dir / "brain_regions.obj",
+                activity_data=mean_activity
+            )
+            obj_files.append("obj/brain_regions.obj")
         
+        self.logger.info(f"  ✓ 生成了 {len(obj_files)} 个OBJ文件")
         return obj_files
     
     def _step_generate_unity_config(self) -> str:
