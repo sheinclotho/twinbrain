@@ -7,8 +7,10 @@ import numpy as np
 import random
 
 # Set CUDA memory allocator configuration to reduce fragmentation
-# This must be set before any CUDA operations
-os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
+# This must be set before any CUDA operations (i.e., at module import time)
+# Uses setdefault to avoid overwriting user-specified configurations
+if 'PYTORCH_CUDA_ALLOC_CONF' not in os.environ:
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 # ============================================================================
 # CRITICAL: Initialize random seeds BEFORE importing torch modules
@@ -1066,7 +1068,10 @@ class DynamicHeteroTrainer:
                     total_predictor += float(predictor_loss.detach().cpu())
                 batches += 1
                 
-                # Explicitly delete large intermediate tensors to free memory
+                # Explicitly delete large intermediate tensors to free GPU memory
+                # While Python GC will eventually collect these, explicit deletion before
+                # torch.cuda.empty_cache() allows CUDA to reclaim GPU memory immediately
+                # rather than waiting for the next GC cycle. This is critical for preventing OOM.
                 del loss, align_loss, temp_loss, recon_loss, recon_norm_loss, spec_loss_total
                 if self.enable_prediction:
                     del predictor_loss
