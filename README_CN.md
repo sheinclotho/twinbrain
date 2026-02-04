@@ -4,7 +4,10 @@
 
 ## 📚 完整文档
 
+👉 **[文档索引](docs/文档索引.md)** - 按需求快速查找文档
+
 ### 主要文档
+
 - **[Unity工作流说明](docs/Unity工作流说明.md)** - Unity集成完整指南 🆕
   - 自动化工作流
   - 一键导出（JSON + OBJ）
@@ -13,13 +16,16 @@
   - 使用示例和最佳实践
 
 - **[FreeSurfer使用指南](docs/FreeSurfer使用指南.md)** - FreeSurfer表面数据支持 🆕🆕
+  - ⚠️ **重要**：FreeSurfer 数据流说明
   - 加载 FreeSurfer 表面文件（.pial）
   - 加载注释文件（.annot）
+  - **如何使用真实的 fMRI/EEG 数据**
   - 导出真实大脑表面网格
   - Python API 和命令行使用
-  - 完整示例代码
 
-- **[Unity更新说明](docs/Unity更新说明.md)** - Unity功能更新记录 🆕
+- **[如何使用多个脑模文件](如何使用多个脑模文件.md)** - FreeSurfer 快速答疑 🆕
+  - 直接回答 FreeSurfer 文件使用问题
+  - ⚠️ 重要概念说明
 
 - **[系统使用指南](docs/TwinBrain系统使用指南.md)** - 完整用户手册
   - 安装和配置
