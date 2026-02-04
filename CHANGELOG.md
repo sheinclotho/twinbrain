@@ -1,5 +1,99 @@
 # TwinBrain 更新历史
 
+## 2026-02-04 (训练稳定性修复)
+
+### 关键修复：训练静滞问题 🔧
+
+#### 问题描述
+- 训练在 "Starting stage: Warmup Stage" 后静滞不动
+- 无错误信息，无计算活动（风扇无声）
+- 用户需手动终止进程
+- 缺乏自检能力和进度反馈
+
+#### 根本原因
+1. 缺少超时机制
+2. CUDA操作无同步检查
+3. 关键操作缺乏错误处理
+4. 缺少进度指示器
+5. 数据加载或模型初始化的静默失败
+
+#### 解决方案
+
+**1. 训练前验证** (train/hetero_trainer.py, lines 648-690)
+```python
+# 检查 data_list 非空
+# 验证模型和 GraphEncoder 已初始化
+# 检查 CUDA 可用性和内存
+# 检查第一个 batch 的数据结构
+```
+
+**2. 心跳监控系统** (TrainingHeartbeat class)
+- 后台线程每30秒记录心跳
+- 60秒无活动时发出警告
+- 自动检测并报告潜在静滞
+- 训练完成或出错时安全清理
+
+**3. 批次级进度日志**
+- 第一个 epoch 记录每个 batch
+- 后续 epoch 每10个 batch 记录一次
+- 显示当前进度 (batch X/Y)
+- 每5个 batch 更新心跳
+
+**4. 关键操作错误处理**
+```python
+# GraphEncoder forward: try-catch + CUDA sync
+# Model forward: try-catch + CUDA sync  
+# Alignment loss: try-catch
+# Prediction loss: try-catch (优雅降级)
+# Temporal prediction: try-catch
+# Backward pass: try-catch + CUDA sync
+```
+
+**5. CUDA 同步检查**
+- data.to(device) 后同步
+- GraphEncoder forward 后同步
+- Model forward 后同步
+- Backward pass 后同步
+- 确保 GPU 操作完成后再继续
+
+**6. 数据结构检查**
+- 训练前检查第一个 batch
+- 记录节点类型、边类型
+- 记录张量形状和数据类型
+- 在计算开始前识别数据问题
+
+#### 使用效果
+```
+2026-02-04 17:20:04 | workflows.training | INFO | Validating training setup...
+2026-02-04 17:20:04 | workflows.training | INFO |   ✓ Data list contains 3 batches
+2026-02-04 17:20:04 | workflows.training | INFO |   ✓ Model and GraphEncoder initialized
+2026-02-04 17:20:04 | workflows.training | INFO |   ✓ Using CUDA device: NVIDIA GeForce RTX 3080
+2026-02-04 17:20:04 | workflows.training | INFO |   ✓ First batch inspection:
+2026-02-04 17:20:04 | workflows.training | INFO |     - fmri.x_seq shape: (200, 384, 200)
+2026-02-04 17:20:04 | workflows.training | INFO |     - eeg.x_seq shape: (62, 500, 62)
+2026-02-04 17:20:04 | workflows.training | INFO | ✓ Heartbeat monitor started
+2026-02-04 17:20:04 | workflows.training | INFO | [Epoch 1/5] Processing batch 1/3...
+2026-02-04 17:20:04 | workflows.training | INFO | [Epoch 1] Running GraphEncoder...
+2026-02-04 17:20:05 | workflows.training | INFO | [Epoch 1] GraphEncoder completed
+2026-02-04 17:20:34 | workflows.training | INFO | [Heartbeat] Training active (last activity 3.2s ago)
+```
+
+#### 影响
+- ✅ 用户可以清楚看到训练进度
+- ✅ 自动检测60秒以上的静滞
+- ✅ 所有错误都有明确的上下文信息
+- ✅ CUDA 操作确保完成
+- ✅ 数据问题在训练前被发现
+- ✅ 训练更稳定可靠
+
+### 技术细节
+- **文件**: `train/hetero_trainer.py`
+- **新增类**: `TrainingHeartbeat` (心跳监控)
+- **修改方法**: `train()` (添加验证、错误处理、进度日志)
+- **兼容性**: 完全向后兼容，无配置更改
+
+---
+
 ## 2026-02-01 (深夜更新)
 
 ### 重要改进：滑动窗口自回归训练 🔧
