@@ -4,6 +4,72 @@
 
 TwinBrain 现在支持直接使用 FreeSurfer 表面文件（.pial）和注释文件（.annot）进行 Unity 可视化。这使得您可以使用真实的大脑表面模型，而不是生成的合成数据。
 
+## ⚠️ 重要概念：FreeSurfer 与时序数据
+
+### FreeSurfer 文件的作用
+
+**FreeSurfer 文件只提供大脑的空间结构**：
+- 🧠 **解剖结构**：脑区的位置、形状、表面网格
+- 🏷️ **分区标签**：每个脑区的名称和网络归属
+- 🎨 **颜色信息**：脑区的标准颜色
+- ❌ **不包含**：脑活动的时间变化数据
+
+### 时序数据需要从其他来源获取
+
+**JSON 导出需要的时序数据来源**：
+
+1. **真实 fMRI 数据**：
+   ```python
+   # 加载您的 fMRI 时间序列
+   fmri_data = load_fmri_timeseries('subject_01_fmri.nii.gz')
+   # 形状: [n_regions, n_timepoints, n_features]
+   ```
+
+2. **训练模型的输出**：
+   ```python
+   # 使用训练好的模型生成预测
+   predictions = model.predict(initial_state, n_steps=200)
+   fmri_data = predictions['fmri']
+   ```
+
+3. **缓存的图数据**：
+   ```python
+   # 从预处理的 HeteroData 加载
+   data = torch.load('preprocessed_data.pt')
+   fmri_data = data['fmri'].x_seq
+   ```
+
+### 正确的数据流
+
+```
+┌─────────────────┐     ┌──────────────────┐
+│ FreeSurfer 文件  │     │ fMRI/EEG 时序数据│
+│ (空间结构)       │     │ (时间变化)        │
+└────────┬────────┘     └────────┬─────────┘
+         │                       │
+         └───────────┬───────────┘
+                     │
+              ┌──────▼──────┐
+              │ JSON 导出    │
+              │ (时空数据)   │
+              └──────┬──────┘
+                     │
+              ┌──────▼──────┐
+              │ Unity 可视化 │
+              └─────────────┘
+```
+
+### 当前实现的限制
+
+⚠️ **注意**：当前实现中，`_load_freesurfer_data()` 方法使用**占位符数据**：
+
+```python
+# 这是占位符！不是真实数据！
+fmri_data = torch.randn(n_regions, n_timepoints, n_features)
+```
+
+**您需要替换为真实数据**。参见本文档后面的 [高级用法](#高级用法) 部分。
+
 ## 支持的文件类型
 
 ### 表面文件（Surface Files）
@@ -176,6 +242,150 @@ for region_id, region_info in atlas_info['regions'].items():
     print(f"脑区 {region_id}: {region_info['label']}")
     print(f"  位置: {region_info['xyz']}")
     print(f"  网络: {region_info['network']}")
+```
+
+### 如何使用真实的 fMRI/EEG 数据
+
+**重要**：FreeSurfer 只定义空间结构，您必须提供时序数据。
+
+#### 方法 1：加载 fMRI 数据文件
+
+```python
+import nibabel as nib
+import numpy as np
+import torch
+
+# 1. 加载 FreeSurfer 图谱
+from unity_integration import load_freesurfer_data
+atlas_info, loader = load_freesurfer_data(
+    lh_surface="lh.pial",
+    rh_surface="rh.pial",
+    lh_annot="lh.Schaefer2018_200Parcels_7Networks_order.annot",
+    rh_annot="rh.Schaefer2018_200Parcels_7Networks_order.annot"
+)
+
+# 2. 加载 fMRI 数据（NIfTI 格式）
+fmri_img = nib.load('subject_01_task_rest_bold.nii.gz')
+fmri_array = fmri_img.get_fdata()  # 形状: [x, y, z, timepoints]
+
+# 3. 提取每个脑区的时间序列
+from nilearn.maskers import NiftiLabelsMasker
+masker = NiftiLabelsMasker(
+    labels_img='Schaefer2018_200Parcels_7Networks.nii.gz',
+    standardize=True
+)
+region_timeseries = masker.fit_transform(fmri_img)
+# 形状: [timepoints, n_regions]
+
+# 4. 转换为 TwinBrain 格式
+fmri_data = torch.FloatTensor(region_timeseries.T)  # [n_regions, timepoints]
+fmri_data = fmri_data.unsqueeze(-1)  # [n_regions, timepoints, 1]
+
+# 5. 使用真实数据运行工作流
+from unity_integration import WorkflowManager, WorkflowConfig
+
+# 创建自定义数据字典
+brain_data = {
+    'fmri': fmri_data,
+    'eeg': None  # 如果没有 EEG 数据
+}
+
+# 创建工作流管理器
+config = WorkflowConfig(
+    data_source='example',  # 使用自定义数据
+    output_dir='output/real_fmri',
+    export_formats=['json', 'obj']
+)
+
+manager = WorkflowManager(config=config, atlas_info=atlas_info)
+# 手动设置数据
+# manager.brain_data = brain_data
+# results = manager.run_full_workflow()
+```
+
+#### 方法 2：使用训练模型的输出
+
+```python
+# 1. 加载训练好的模型
+from train.hetero_trainer import HeteroGCNTrainer
+model = torch.load('checkpoints/best_model.pt')
+
+# 2. 加载 FreeSurfer 图谱
+atlas_info, loader = load_freesurfer_data(...)
+
+# 3. 准备初始状态
+initial_state = get_initial_brain_state()  # 您的函数
+
+# 4. 使用模型生成预测
+model.eval()
+with torch.no_grad():
+    predictions = model.predict(
+        initial_state,
+        n_steps=200,
+        use_prediction_head=True
+    )
+
+# 5. 提取预测的 fMRI 数据
+fmri_predictions = predictions['fmri']
+# 形状: [n_regions, n_timepoints, n_features]
+
+# 6. 导出到 Unity
+brain_data = {
+    'fmri': fmri_predictions,
+    'eeg': predictions.get('eeg', None)
+}
+
+# 继续工作流...
+```
+
+#### 方法 3：使用缓存的图数据
+
+```python
+# 1. 加载预处理的数据
+data_list = torch.load('data/processed/subject_01_data.pt')
+
+# 2. 提取时间序列
+fmri_sequences = []
+for data in data_list:
+    if 'fmri' in data.node_types:
+        fmri_seq = data['fmri'].x_seq  # [n_regions, time, features]
+        fmri_sequences.append(fmri_seq)
+
+# 3. 合并所有序列
+fmri_data = torch.cat(fmri_sequences, dim=1)  # 沿时间轴合并
+
+# 4. 使用这些数据...
+```
+
+#### 方法 4：修改 WorkflowManager 直接集成
+
+**推荐方式**：修改 `unity_integration/workflow_manager.py`
+
+```python
+# 在 _load_freesurfer_data() 方法中替换占位符
+def _load_freesurfer_data(self) -> tuple:
+    """加载FreeSurfer数据并加载真实活动数据"""
+    
+    # ... FreeSurfer 加载代码 ...
+    
+    # === 替换这部分 ===
+    # 旧代码（占位符）：
+    # fmri_data = torch.randn(n_regions, n_timepoints, n_features)
+    
+    # 新代码（真实数据）：
+    from your_data_module import load_subject_fmri
+    fmri_data = load_subject_fmri(
+        subject_id=self.config.subject_id,
+        n_regions=n_regions,
+        atlas_info=self.atlas_info
+    )
+    
+    # 确保形状正确
+    assert fmri_data.shape[0] == n_regions, "区域数量不匹配"
+    if fmri_data.dim() == 2:
+        fmri_data = fmri_data.unsqueeze(-1)  # 添加特征维度
+    
+    # ... 继续其余代码 ...
 ```
 
 ### 导出不同的表面组合
