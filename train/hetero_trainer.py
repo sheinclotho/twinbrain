@@ -6,6 +6,12 @@ from typing import Any, Dict, List, Optional, Tuple, Union, Callable
 import numpy as np
 import random
 
+# Set CUDA memory allocator configuration to reduce fragmentation
+# This must be set before any CUDA operations (i.e., at module import time)
+# Uses setdefault to avoid overwriting user-specified configurations
+if 'PYTORCH_CUDA_ALLOC_CONF' not in os.environ:
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
 # ============================================================================
 # CRITICAL: Initialize random seeds BEFORE importing torch modules
 # This prevents THPGenerator_initDefaultGenerator errors during CUDA operations
@@ -109,6 +115,7 @@ class DynamicHeteroTrainer:
         enable_metrics_tracking: bool = True,
         metrics_output_dir: Optional[str] = None,
         gradient_accumulation_steps: int = 1,  # NEW: Gradient accumulation
+        clear_cache_frequency: int = 1,  # NEW: Clear CUDA cache every N batches (1=every batch)
     ):
         # ---------- Early random seed initialization (runtime call) ----------
         # NOTE: Module-level seed initialization has ALREADY occurred (lines 13-20)
@@ -207,6 +214,9 @@ class DynamicHeteroTrainer:
         
         # New: gradient accumulation
         self.gradient_accumulation_steps = max(1, int(gradient_accumulation_steps))
+        
+        # New: CUDA cache clearing frequency
+        self.clear_cache_frequency = max(1, int(clear_cache_frequency))
 
         # New: metrics tracking
         self.enable_metrics_tracking = bool(enable_metrics_tracking)
@@ -630,6 +640,10 @@ class DynamicHeteroTrainer:
             return outputs
 
         for epoch in range(1, epochs + 1):
+            # Clear CUDA cache at the start of each epoch for a clean slate
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                
             start = time.time()
             total_loss = total_align = total_temp = total_recon = total_recon_norm = total_spec = 0.0
             total_predictor = 0.0  # NEW: Track PredictorHead loss
@@ -786,6 +800,9 @@ class DynamicHeteroTrainer:
                             pred_loss = F_nn.mse_loss(predictions, target_seq)
                             window_loss = window_loss + pred_loss
                             num_windows += 1
+                            
+                            # Clean up intermediate tensors to free memory
+                            del predictions, pred_loss, context_seq, target_seq
                         
                         # Average over all windows
                         if num_windows > 0:
@@ -1039,7 +1056,7 @@ class DynamicHeteroTrainer:
                             torch.nn.utils.clip_grad_norm_(params_to_clip, self.grad_clip)
                         self.optimizer.step()
 
-                # 13) accumulate stats
+                # 13) accumulate stats (convert to python floats to free GPU memory)
                 total_loss += float(loss.detach().cpu())
                 total_align += float(align_loss.detach().cpu())
                 total_temp += float(temp_loss.detach().cpu())
@@ -1050,9 +1067,25 @@ class DynamicHeteroTrainer:
                 if self.enable_prediction and predictor_loss.numel() != 0:
                     total_predictor += float(predictor_loss.detach().cpu())
                 batches += 1
+                
+                # Explicitly delete large intermediate tensors to free GPU memory
+                # While Python GC will eventually collect these, explicit deletion before
+                # torch.cuda.empty_cache() allows CUDA to reclaim GPU memory immediately
+                # rather than waiting for the next GC cycle. This is critical for preventing OOM.
+                del loss, align_loss, temp_loss, recon_loss, recon_norm_loss, spec_loss_total
+                if self.enable_prediction:
+                    del predictor_loss
+                # Delete other large tensors
+                del z_dict, gru_seq_dict, proj_seq_dict, recon_seq_dict, recon_seq_scaled
+                del global_seq, recon_feature_dict, recon_denorm_dict, recon_final_map
 
                 if data_idx == 0 and verbose:
                     self.logger.info(f"[Train] epoch={epoch} batch=0 recon_losses={recon_losses_per_nt}")
+                
+                # Clear CUDA cache periodically to prevent memory fragmentation
+                # Only clear every N batches based on clear_cache_frequency setting
+                if torch.cuda.is_available() and (data_idx + 1) % self.clear_cache_frequency == 0:
+                    torch.cuda.empty_cache()
 
             if batches == 0:
                 raise RuntimeError(
@@ -1148,6 +1181,10 @@ class DynamicHeteroTrainer:
                         new_lr = max(old_lr * lr_shrink, min_lr)
                         g["lr"] = new_lr
                     no_improve = 0
+
+            # Clear CUDA cache after each epoch to prevent memory accumulation
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
             if verbose:
                 # Build log message with prediction loss if enabled

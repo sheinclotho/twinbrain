@@ -25,6 +25,7 @@ training:
   learning_rate: 0.0001
   weight_decay: 0.0001
   gradient_accumulation_steps: 1  # Accumulate gradients over N steps (1=no accumulation)
+  clear_cache_frequency: 1  # Clear CUDA cache every N batches (1=every batch, higher=less frequent)
   
   # Learning rate multipliers
   feature_lr_mul: 12.0
