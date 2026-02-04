@@ -19,6 +19,14 @@ except ImportError:
     WEBSOCKETS_AVAILABLE = False
     logging.warning("websockets package not available. Install with: pip install websockets")
 
+# Import ModelServer
+try:
+    from .model_server import ModelServer
+    MODEL_SERVER_AVAILABLE = True
+except ImportError:
+    MODEL_SERVER_AVAILABLE = False
+    logging.warning("ModelServer not available")
+
 
 class BrainVisualizationServer:
     """
@@ -36,6 +44,8 @@ class BrainVisualizationServer:
         model = None,
         exporter = None,
         simulator = None,
+        model_path: Optional[str] = None,
+        output_dir: Optional[str] = None,
         host: str = "0.0.0.0",
         port: int = 8765
     ):
@@ -43,9 +53,11 @@ class BrainVisualizationServer:
         Initialize server.
         
         Args:
-            model: Trained neural network model
+            model: Trained neural network model (legacy, use model_path instead)
             exporter: BrainStateExporter instance
             simulator: StimulationSimulator instance
+            model_path: Path to trained model file
+            output_dir: Output directory for predictions
             host: Server host
             port: Server port
         """
@@ -57,6 +69,22 @@ class BrainVisualizationServer:
         self.simulator = simulator
         self.host = host
         self.port = port
+        
+        # Initialize ModelServer if available
+        self.model_server = None
+        if MODEL_SERVER_AVAILABLE and model_path:
+            self.model_server = ModelServer(
+                model_path=model_path,
+                output_dir=output_dir or "unity_project/brain_data/model_output"
+            )
+            self.logger = logging.getLogger(__name__)
+            self.logger.info("✓ ModelServer initialized")
+        elif MODEL_SERVER_AVAILABLE and model:
+            # Create ModelServer without loading (use existing model)
+            self.model_server = ModelServer(
+                output_dir=output_dir or "unity_project/brain_data/model_output"
+            )
+            self.model_server.model = model
         
         self.clients: Set = set()
         self.logger = logging.getLogger(__name__)
@@ -189,6 +217,23 @@ class BrainVisualizationServer:
         n_steps = request.get("n_steps", 10)
         
         try:
+            # Use ModelServer if available
+            if self.model_server:
+                self.logger.info(f"Using ModelServer for prediction ({n_steps} steps)")
+                predictions = self.model_server.predict_future(
+                    n_steps=n_steps,
+                    subject_id="prediction"
+                )
+                
+                return {
+                    "type": "prediction",
+                    "success": True,
+                    "n_steps": n_steps,
+                    "predictions": predictions,
+                    "saved_to": str(self.model_server.output_dir)
+                }
+            
+            # Fallback to simple prediction generation
             import torch
             import numpy as np
             
@@ -236,7 +281,6 @@ class BrainVisualizationServer:
         try:
             import torch
             import numpy as np
-            from .stimulation_simulator import StimulationConfig
             
             # Parse stimulation parameters
             target_regions = stimulation.get("target_regions", [])
@@ -247,6 +291,30 @@ class BrainVisualizationServer:
             
             n_regions = 200
             n_steps = 50
+            
+            # Use ModelServer if available
+            if self.model_server:
+                self.logger.info(f"Using ModelServer for stimulation simulation")
+                responses = self.model_server.simulate_stimulation(
+                    target_regions=target_regions,
+                    amplitude=amplitude,
+                    pattern=pattern,
+                    frequency=frequency,
+                    duration=duration,
+                    subject_id="stimulation"
+                )
+                
+                return {
+                    "type": "simulation",
+                    "success": True,
+                    "n_steps": len(responses),
+                    "stimulation": stimulation,
+                    "responses": responses,
+                    "saved_to": str(self.model_server.output_dir)
+                }
+            
+            # Fallback to using simulator
+            from .stimulation_simulator import StimulationConfig
             
             # Create stimulation config
             stim_config = StimulationConfig(
