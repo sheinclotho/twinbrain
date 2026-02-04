@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+import threading
 from typing import Any, Dict, List, Optional, Tuple, Union, Callable
 
 import numpy as np
@@ -48,6 +49,67 @@ try:
 except Exception:
     def lowpass_mse_loss(a, b, kernel_size=11):
         return torch.tensor(0.0, device=(a.device if a is not None else "cpu"))
+
+
+class TrainingHeartbeat:
+    """
+    Simple heartbeat monitor for detecting training stalls.
+    Logs periodic heartbeat messages to show training is making progress.
+    """
+    def __init__(self, logger: logging.Logger, interval: int = 30):
+        """
+        Args:
+            logger: Logger to use for heartbeat messages
+            interval: Heartbeat interval in seconds (default: 30)
+        """
+        self.logger = logger
+        self.interval = interval
+        self.last_heartbeat = time.time()
+        self.active = False
+        self.thread = None
+        self._stop_event = threading.Event()
+        
+    def start(self):
+        """Start the heartbeat monitor."""
+        self.active = True
+        self.last_heartbeat = time.time()
+        self._stop_event.clear()
+        self.thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        self.thread.start()
+        
+    def stop(self):
+        """Stop the heartbeat monitor."""
+        self.active = False
+        self._stop_event.set()
+        if self.thread is not None:
+            self.thread.join(timeout=2.0)
+            
+    def update(self, message: Optional[str] = None):
+        """
+        Update the heartbeat timestamp.
+        
+        Args:
+            message: Optional message to log immediately
+        """
+        self.last_heartbeat = time.time()
+        if message:
+            self.logger.info(f"[Heartbeat] {message}")
+    
+    def _heartbeat_loop(self):
+        """Background thread that monitors for stalls."""
+        while self.active and not self._stop_event.is_set():
+            self._stop_event.wait(self.interval)
+            if not self.active:
+                break
+            elapsed = time.time() - self.last_heartbeat
+            if elapsed > self.interval * 2:
+                self.logger.warning(
+                    f"[Heartbeat] No activity for {elapsed:.1f}s - possible stall detected!"
+                )
+            else:
+                self.logger.info(
+                    f"[Heartbeat] Training active (last activity {elapsed:.1f}s ago)"
+                )
 
 
 class DynamicHeteroTrainer:
@@ -616,8 +678,14 @@ class DynamicHeteroTrainer:
         else:
             self.logger.info(f"  ✗ Prediction DISABLED")
         self.logger.info("=" * 80)
+        
+        # NEW: Start heartbeat monitor to detect stalls
+        heartbeat = TrainingHeartbeat(self.logger, interval=30)
+        heartbeat.start()
+        self.logger.info("✓ Heartbeat monitor started (will log every 30s)")
 
-        # batch_rescale 默认配置防御
+        try:
+            # batch_rescale 默认配置防御
         if "warmup_epochs" not in self.batch_rescale_cfg:
             self.batch_rescale_cfg["warmup_epochs"] = 0
         if not hasattr(self, "scale_only_epochs"):
@@ -657,6 +725,9 @@ class DynamicHeteroTrainer:
             total_loss = total_align = total_temp = total_recon = total_recon_norm = total_spec = 0.0
             total_predictor = 0.0  # NEW: Track PredictorHead loss
             batches = 0
+            
+            # Update heartbeat at epoch start
+            heartbeat.update(f"Starting epoch {epoch}/{epochs}")
 
             # warmup 结束后解冻 scale
             if epoch == self.warmup_epochs + 1 and self.freeze_scale_during_warmup:
@@ -671,6 +742,10 @@ class DynamicHeteroTrainer:
                 )
 
             for data_idx, data in enumerate(self.data_list):
+                # Update heartbeat every batch
+                if data_idx % 5 == 0:
+                    heartbeat.update()
+                    
                 # Log progress every batch in first epoch, then every 10 batches
                 if epoch == 1 or data_idx % 10 == 0:
                     self.logger.info(f"[Epoch {epoch}/{epochs}] Processing batch {data_idx + 1}/{len(self.data_list)}...")
@@ -1245,7 +1320,21 @@ class DynamicHeteroTrainer:
                 self.logger.info(log_msg)
                 self.logger.info(f"[Epoch {epoch}] relative_error={rel_error_epoch}")
 
+        except Exception as e:
+            # Ensure heartbeat stops even on error
+            heartbeat.stop()
+            self.logger.error(f"Training failed with exception: {e}")
+            raise
+        finally:
+            # Always stop heartbeat on exit
+            if heartbeat.active:
+                heartbeat.stop()
+
         # Training completed - save metrics and print summary
+        heartbeat.stop()
+        self.logger.info("✓ Training completed successfully")
+        self.logger.info("✓ Heartbeat monitor stopped")
+        
         if self.metrics_tracker is not None:
             self.metrics_tracker.save_metrics()
             self.metrics_tracker.print_summary(last_n_epochs=min(10, epochs))
