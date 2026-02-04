@@ -19,9 +19,9 @@ import torch.nn.functional as F
 from meta_node import MetaNode
 from node_generator import generate_nodes_all_regions
 from mapper.atlas_mapper import BrainAtlas
-# Optional mapper imports - kept for reference:
-# from mapper.bids_mapper import BIDSMapper
-# from mapper.eeg_mapper import EEGMapper
+# Required mapper imports for preprocessing:
+from mapper.bids_mapper import BIDSMapper
+from mapper.eeg_mapper import EEGMapper
 from mapper.multi_modal_mapper import MultiModalMapper
 
 # =============================

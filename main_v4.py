@@ -27,7 +27,7 @@ except Exception:
 
 from utils.utils import plot_recon_vs_target
 from utils.analysis import compute_xcorr_best_lag
-from stim_align import batch_generate_stim
+# Deprecated: from stim_align import batch_generate_stim
 # from node_generator import generate_nodes_all_regions  # Unused - graph built via build_hetero_graph
 # from edge_computer import generate_edges_with_dti_fallback  # Module does not exist
 from mapper.atlas_mapper import BrainAtlas
@@ -85,19 +85,17 @@ def main():
         logging.info(f"[Discover] EEG tasks: {eeg_tasks}")
         logging.info(f"[Discover] fMRI tasks: {fmri_tasks}")
 
-        stim_cache = result_dir / "stim.pt"
         eeg_data_cache = result_dir / "eeg_data.pt"
         hetero_graphs_cache = result_dir / "hetero_graphs_for_training.pt"
 
-        if stim_cache.exists() and eeg_data_cache.exists() and hetero_graphs_cache.exists():
+        if eeg_data_cache.exists() and hetero_graphs_cache.exists():
             logging.info("[FULL CACHE HIT] Loading cached preprocessed data")
-            stim = torch.load(stim_cache, map_location="cpu", weights_only=False)
-            eeg_data = torch.load(eeg_data_cache, map_location="cpu", weights_only=False)
             hetero_graphs = torch.load(hetero_graphs_cache, map_location="cpu", weights_only=False)
         else:
             logging.info("[CACHE MISS] running preprocessing + graph building")
-            stim = batch_generate_stim(subj)
-            torch.save(stim, stim_cache)
+            # Deprecated: stim = batch_generate_stim(subj)
+            stim = None  # stim functionality has been deprecated
+            # Removed: torch.save(stim, stim_cache)
 
             fmri_data = load_fmri(
                 func_dir=PATHS["func_dir"],
@@ -118,7 +116,8 @@ def main():
             nodes = build_nodes(atlas)
             save_nodes_json(nodes, PATHS["nodes_json"])
 
-            hetero_graphs = build_hetero_graph(fmri_data, eeg_data, stim_dict=stim)
+            # Build heterogeneous graphs without stim (deprecated functionality)
+            hetero_graphs = build_hetero_graph(fmri_data, eeg_data, stim_dict=None)
             torch.save(hetero_graphs, hetero_graphs_cache)
 
         # Trainer construction: use stable defaults (edit these in file before running)
