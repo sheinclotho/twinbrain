@@ -238,7 +238,7 @@ class DynamicHeteroTrainer:
                 spatial_T=self.spatial_T,
                 hidden_dim=self.hidden_dim,
                 debug=self.debug,
-            )
+            ).to(self.device)
         except Exception as e:
             raise RuntimeError(f"[Init] Failed to construct GraphEncoder: {e}")
 
@@ -634,6 +634,13 @@ class DynamicHeteroTrainer:
             total_loss = total_align = total_temp = total_recon = total_recon_norm = total_spec = 0.0
             total_predictor = 0.0  # NEW: Track PredictorHead loss
             batches = 0
+            
+            # Check for empty data_list to prevent silent hangs
+            if len(self.data_list) == 0:
+                raise RuntimeError(
+                    f"[Train] data_list is empty at epoch {epoch}. "
+                    "Training cannot proceed without data."
+                )
 
             # warmup 结束后解冻 scale
             if epoch == self.warmup_epochs + 1 and self.freeze_scale_during_warmup:
@@ -672,6 +679,8 @@ class DynamicHeteroTrainer:
                     num_nodes_dict=num_nodes_dict,
                     stats_dict=stats_dict,
                 )
+                # Validate model outputs before unpacking
+                outputs = _validate_model_outputs(outputs)
                 (
                     z_dict,
                     gru_seq_dict,
@@ -1046,7 +1055,11 @@ class DynamicHeteroTrainer:
                     self.logger.info(f"[Train] epoch={epoch} batch=0 recon_losses={recon_losses_per_nt}")
 
             if batches == 0:
-                raise RuntimeError("[Train] No batches processed in epoch; check data_list and graph_encoder outputs")
+                raise RuntimeError(
+                    f"[Train] No batches processed in epoch {epoch}. "
+                    "All batches may have been skipped or failed validation. "
+                    "Check data_list content and graph_encoder outputs."
+                )
 
             # 14) epoch-level log & scheduler
             avg_total = total_loss / batches
