@@ -40,6 +40,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Constants
+VERSION = "2.4"
+DEFAULT_MODEL_FILENAME = "hetero_gnn_trained.pt"
+
 
 class UnityWorkflowSetup:
     """Unity工作流一键式自动化设置"""
@@ -969,7 +973,7 @@ def load_trained_model(model_path):
 
 def main():
     # 配置
-    MODEL_PATH = "{self.project_root}/results/hetero_gnn_trained.pt"
+    MODEL_PATH = "{self.project_root}/results/{DEFAULT_MODEL_FILENAME}"
     DATA_DIR = "{self.data_dir}"
     OUTPUT_DIR = "{self.model_output_dir}"
     PORT = 8765
@@ -1331,7 +1335,7 @@ PORT = 8765  # 改为其他端口
 ---
 
 **生成时间**: {self._get_timestamp()}
-**工具版本**: TwinBrain v2.4
+**工具版本**: TwinBrain v{VERSION}
 '''
         
         doc_path = self.output_base / "README_WORKFLOW.md"

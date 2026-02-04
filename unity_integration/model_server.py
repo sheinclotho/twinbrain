@@ -316,7 +316,7 @@ class ModelServer:
         n_regions = state.shape[0]
         
         # 规范化活动值到 [0, 1]
-        activity = state[:, 0].numpy() if state.is_cuda == False else state[:, 0].cpu().numpy()
+        activity = state[:, 0].numpy() if not state.is_cuda else state[:, 0].cpu().numpy()
         
         # 使用tanh进行软规范化
         activity_normalized = (np.tanh(activity) + 1) / 2

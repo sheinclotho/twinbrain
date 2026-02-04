@@ -85,9 +85,11 @@ class BrainVisualizationServer:
                 output_dir=output_dir or "unity_project/brain_data/model_output"
             )
             self.model_server.model = model
+            self.logger = logging.getLogger(__name__)
+        else:
+            self.logger = logging.getLogger(__name__)
         
         self.clients: Set = set()
-        self.logger = logging.getLogger(__name__)
     
     async def register_client(self, websocket):
         """Register a new client connection."""
