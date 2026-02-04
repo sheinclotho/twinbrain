@@ -679,6 +679,8 @@ class DynamicHeteroTrainer:
                     num_nodes_dict=num_nodes_dict,
                     stats_dict=stats_dict,
                 )
+                # Validate model outputs before unpacking
+                outputs = _validate_model_outputs(outputs)
                 (
                     z_dict,
                     gru_seq_dict,
@@ -1053,7 +1055,11 @@ class DynamicHeteroTrainer:
                     self.logger.info(f"[Train] epoch={epoch} batch=0 recon_losses={recon_losses_per_nt}")
 
             if batches == 0:
-                raise RuntimeError("[Train] No batches processed in epoch; check data_list and graph_encoder outputs")
+                raise RuntimeError(
+                    f"[Train] No batches processed in epoch {epoch}. "
+                    "All batches may have been skipped or failed validation. "
+                    "Check data_list content and graph_encoder outputs."
+                )
 
             # 14) epoch-level log & scheduler
             avg_total = total_loss / batches
