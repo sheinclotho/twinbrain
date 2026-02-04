@@ -38,7 +38,8 @@ class PredictorHead(nn.Module):
         num_layers: int = 3,
         num_heads: int = 8,
         dropout: float = 0.1,
-        use_residual: bool = True
+        use_residual: bool = True,
+        use_gradient_checkpointing: bool = True
     ):
         """
         Initialize predictor head.
@@ -52,12 +53,15 @@ class PredictorHead(nn.Module):
             num_heads: Number of attention heads
             dropout: Dropout probability
             use_residual: Whether to use residual connections
+            use_gradient_checkpointing: Whether to use gradient checkpointing to save memory.
+                                       Default: True (recommended for large models)
         """
         super().__init__()
         self.hidden_dim = hidden_dim
         self.n_future_steps = n_future_steps
         self.context_length = context_length
         self.use_residual = use_residual
+        self.use_gradient_checkpointing = use_gradient_checkpointing
         
         # Temporal prediction network
         self.predictor_gru = nn.GRU(
@@ -118,7 +122,13 @@ class PredictorHead(nn.Module):
             context_seq = latent_seq
         
         # Initialize with context sequence
-        _, hidden = self.predictor_gru(context_seq)
+        # Use gradient checkpointing for memory efficiency during training
+        if self.use_gradient_checkpointing and self.training:
+            from torch.utils.checkpoint import checkpoint
+            # Wrap GRU call in checkpoint to reduce memory usage
+            _, hidden = checkpoint(self.predictor_gru, context_seq, use_reentrant=False)
+        else:
+            _, hidden = self.predictor_gru(context_seq)
         
         # Auto-regressive prediction
         predictions = []
@@ -129,7 +139,16 @@ class PredictorHead(nn.Module):
         
         for t in range(self.n_future_steps):
             # Predict next step with GRU
-            pred, hidden = self.predictor_gru(current, hidden)  # [B, 1, H]
+            # Use gradient checkpointing for memory efficiency
+            if self.use_gradient_checkpointing and self.training:
+                from torch.utils.checkpoint import checkpoint
+                pred, hidden = checkpoint(
+                    lambda c, h: self.predictor_gru(c, h),
+                    current, hidden,
+                    use_reentrant=False
+                )
+            else:
+                pred, hidden = self.predictor_gru(current, hidden)  # [B, 1, H]
             
             # Apply attention to historical context
             attended, attn_weights = self.temporal_attention(

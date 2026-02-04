@@ -10,7 +10,7 @@ random_seed: 42
 # Training parameters
 training:
   # Warmup stage: freeze scale parameters for stable initialization
-  warmup_epochs: 5  # Number of epochs to freeze scale parameters
+  warmup_epochs: 3  # Number of epochs to freeze scale parameters (reduced for memory efficiency)
   warmup_learning_rate: 0.00005  # Lower LR during warmup for stability
   
   # Main training stage: primary training with default loss weights
@@ -39,7 +39,7 @@ training:
 
 # Model architecture
 model:
-  hidden_dim: 128
+  hidden_dim: 96  # Reduced from 128 for better memory efficiency on 8GB GPUs
   num_layers: 2
   decoder_layers: 3  # Deeper decoder than v3
   dropout: 0.1
@@ -66,9 +66,10 @@ loss:
 # Prediction settings (NEW)
 prediction:
   enabled: false  # Enable multi-step future prediction
-  context_length: 50  # Number of historical steps to use as context
+  context_length: 50  # Number of historical steps to use as context (limits memory usage)
   steps: 10  # Number of future steps to predict
   weight: 0.1  # Weight for prediction loss
+  use_gradient_checkpointing: true  # Use gradient checkpointing to save memory (recommended)
   # Example: Use last 50 steps to predict next 10 steps
   
 # Auto-alignment settings
@@ -105,3 +106,24 @@ output:
   checkpoint_interval: 20  # Save every N epochs
   save_final_model: true
   results_dir: "results"
+
+# Memory optimization (NEW) - Critical for GPUs with limited memory
+memory:
+  # GPU memory optimization settings
+  optimize_for_low_memory: true  # Enable memory-efficient training mode
+  
+  # CUDA memory management
+  enable_empty_cache: true  # Clear CUDA cache periodically
+  cache_clear_frequency: 1  # Clear cache every N batches (1=every batch)
+  
+  # Gradient checkpointing
+  use_gradient_checkpointing: true  # Enable gradient checkpointing for GRU/attention
+  
+  # Context length limits (prevent OOM on long sequences)
+  max_sequence_length: 200  # Maximum sequence length to process at once
+  
+  # Tips for 8GB GPU:
+  # - Keep hidden_dim <= 96
+  # - Set prediction.context_length <= 50
+  # - Enable gradient_checkpointing
+  # - Set clear_cache_frequency = 1
