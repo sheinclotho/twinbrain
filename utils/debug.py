@@ -1,10 +1,20 @@
-import os, math
+import os
+import math
+import random
 import numpy as np
+
+# Initialize random seeds before torch import to prevent THPGenerator errors
+_INIT_SEED = 42
+random.seed(_INIT_SEED)
+np.random.seed(_INIT_SEED)
+
 import matplotlib.pyplot as plt
 import torch
+# MUST call manual_seed immediately after torch import
+torch.manual_seed(_INIT_SEED)
+
 from scipy.signal import welch, correlate
 import torch.nn.functional as F
-import os
 import logging
 from typing import Optional, Dict, Any
 

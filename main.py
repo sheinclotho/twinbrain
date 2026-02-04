@@ -27,7 +27,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from utils.config import load_config
 from utils.logging_utils import setup_logging, get_logger
-from workflows.training import run_training
+
+# NOTE: Do NOT import torch-dependent modules here (e.g., workflows.training)
+# They must be imported after random seed initialization in main()
 
 logger = None  # Will be initialized after setup_logging
 
@@ -168,12 +170,15 @@ def main():
     try:
         if args.workflow == 'train':
             logger.info("Starting training workflow")
+            # Import after seed initialization to prevent THPGenerator errors
+            from workflows.training import run_training
             base_dir = args.base_dir or Path(__file__).parent / "test_file3"
             run_training(config, base_dir=base_dir)
             logger.info("Training workflow completed successfully")
             
         elif args.workflow == 'export':
             logger.info("Starting export workflow")
+            # Import after seed initialization
             from workflows.export_latent import run_export
             subject = args.subject or "sub-01"
             run_export(config, subject=subject)

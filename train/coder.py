@@ -2,7 +2,18 @@ import os
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
+import random
+import numpy as np
+
+# Initialize random seeds before torch import to prevent THPGenerator errors
+_INIT_SEED = 42
+random.seed(_INIT_SEED)
+np.random.seed(_INIT_SEED)
+
 import torch
+# MUST call manual_seed immediately after torch import
+torch.manual_seed(_INIT_SEED)
+
 import torch.nn as nn
 import torch.nn.functional as F_nn
 from torch_geometric.data import HeteroData
