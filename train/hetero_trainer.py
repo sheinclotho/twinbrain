@@ -583,6 +583,29 @@ class DynamicHeteroTrainer:
         self.model.train()
         self.aligner.train()
         
+        # NEW: Validate training setup before starting
+        self.logger.info("=" * 80)
+        self.logger.info("Validating training setup...")
+        
+        # Check data_list is valid
+        if not hasattr(self, 'data_list') or not self.data_list:
+            raise RuntimeError("data_list is empty or not initialized. Cannot start training.")
+        self.logger.info(f"  ✓ Data list contains {len(self.data_list)} batches")
+        
+        # Check models are initialized
+        if self.model is None or self.graph_encoder is None:
+            raise RuntimeError("Model or GraphEncoder not initialized. Cannot start training.")
+        self.logger.info(f"  ✓ Model and GraphEncoder initialized")
+        
+        # Check device availability
+        if self.device.type == 'cuda':
+            if not torch.cuda.is_available():
+                raise RuntimeError("CUDA device specified but not available.")
+            self.logger.info(f"  ✓ Using CUDA device: {torch.cuda.get_device_name(0)}")
+            self.logger.info(f"  ✓ CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        else:
+            self.logger.info(f"  ✓ Using device: {self.device}")
+        
         # NEW: Log training configuration at start
         self.logger.info("=" * 80)
         self.logger.info(f"Starting Training: {epochs} epochs")
@@ -648,14 +671,42 @@ class DynamicHeteroTrainer:
                 )
 
             for data_idx, data in enumerate(self.data_list):
-                data = data.to(self.device)
+                # Log progress every batch in first epoch, then every 10 batches
+                if epoch == 1 or data_idx % 10 == 0:
+                    self.logger.info(f"[Epoch {epoch}/{epochs}] Processing batch {data_idx + 1}/{len(self.data_list)}...")
+                
+                try:
+                    # Move data to device with timeout protection
+                    data = data.to(self.device)
+                    
+                    # Ensure CUDA operations complete if using GPU
+                    if self.device.type == 'cuda':
+                        torch.cuda.synchronize()
+                except RuntimeError as e:
+                    self.logger.error(f"Failed to move data to device: {e}")
+                    raise RuntimeError(f"Data transfer to {self.device} failed at epoch {epoch}, batch {data_idx}: {e}")
                 
                 # Zero gradients only at start of accumulation cycle
                 if data_idx % self.gradient_accumulation_steps == 0:
                     self.optimizer.zero_grad(set_to_none=True)
 
-                # 1) GraphEncoder
-                enc_out = self.graph_encoder(data)
+                # 1) GraphEncoder with error handling
+                try:
+                    if data_idx == 0:
+                        self.logger.info(f"[Epoch {epoch}] Running GraphEncoder on batch {data_idx}...")
+                    enc_out = self.graph_encoder(data)
+                    
+                    # Ensure CUDA operations complete if using GPU
+                    if self.device.type == 'cuda':
+                        torch.cuda.synchronize()
+                        
+                    if data_idx == 0:
+                        self.logger.info(f"[Epoch {epoch}] GraphEncoder completed successfully")
+                except Exception as e:
+                    self.logger.error(f"GraphEncoder failed at epoch {epoch}, batch {data_idx}: {e}")
+                    self.logger.error(f"Data type: {type(data)}, Device: {self.device}")
+                    raise RuntimeError(f"GraphEncoder forward pass failed: {e}")
+                
                 if not (isinstance(enc_out, (list, tuple)) and len(enc_out) >= 5):
                     raise RuntimeError(
                         "graph_encoder(data) must return at least 5-tuple "
@@ -664,14 +715,27 @@ class DynamicHeteroTrainer:
                     )
                 x_dict, num_nodes_dict, stats_dict, x_raw_map, edge_index_dict = enc_out[:5]
 
-                # 2) model forward
-                outputs = self.model(
-                    data=data,
-                    edge_index_dict=edge_index_dict,
-                    encoded_dict=x_dict,
-                    num_nodes_dict=num_nodes_dict,
-                    stats_dict=stats_dict,
-                )
+                # 2) model forward with error handling
+                try:
+                    if data_idx == 0:
+                        self.logger.info(f"[Epoch {epoch}] Running model forward pass...")
+                    outputs = self.model(
+                        data=data,
+                        edge_index_dict=edge_index_dict,
+                        encoded_dict=x_dict,
+                        num_nodes_dict=num_nodes_dict,
+                        stats_dict=stats_dict,
+                    )
+                    
+                    # Ensure CUDA operations complete if using GPU
+                    if self.device.type == 'cuda':
+                        torch.cuda.synchronize()
+                        
+                    if data_idx == 0:
+                        self.logger.info(f"[Epoch {epoch}] Model forward completed successfully")
+                except Exception as e:
+                    self.logger.error(f"Model forward failed at epoch {epoch}, batch {data_idx}: {e}")
+                    raise RuntimeError(f"Model forward pass failed: {e}")
                 (
                     z_dict,
                     gru_seq_dict,
@@ -710,14 +774,18 @@ class DynamicHeteroTrainer:
                         sanitized_z[nt] = z
 
                 # 4) align loss
-                a_z_f = sanitized_z.get("fmri", None)
-                a_z_e = sanitized_z.get("eeg", None)
-                if a_z_f is not None and a_z_e is not None:
-                    align_loss = self.aligner(a_z_f, a_z_e)
-                    if not isinstance(align_loss, torch.Tensor):
-                        raise TypeError("aligner must return a torch.Tensor")
-                else:
-                    align_loss = torch.tensor(0.0, device=self.device)
+                try:
+                    a_z_f = sanitized_z.get("fmri", None)
+                    a_z_e = sanitized_z.get("eeg", None)
+                    if a_z_f is not None and a_z_e is not None:
+                        align_loss = self.aligner(a_z_f, a_z_e)
+                        if not isinstance(align_loss, torch.Tensor):
+                            raise TypeError("aligner must return a torch.Tensor")
+                    else:
+                        align_loss = torch.tensor(0.0, device=self.device)
+                except Exception as e:
+                    self.logger.error(f"Alignment loss computation failed at epoch {epoch}, batch {data_idx}: {e}")
+                    raise RuntimeError(f"Alignment loss computation failed: {e}")
 
                 # 5) temporal prediction loss + raw 预测 loss
                 temp_loss = torch.tensor(0.0, device=self.device)
@@ -727,11 +795,74 @@ class DynamicHeteroTrainer:
                 # NEW: Use PredictorHead for prediction if enabled
                 predictor_loss = torch.tensor(0.0, device=self.device)
                 if self.enable_prediction and self.predictor is not None:
-                    # Use PredictorHead for multi-step prediction with sliding window
-                    # Log once per epoch to confirm prediction is running
-                    if data_idx == 0 and epoch % 10 == 0 and verbose:
-                        self.logger.info(f"[Prediction] Running autoregressive prediction (context={self.prediction_context_length}, steps={self.prediction_steps})")
-                    
+                    try:
+                        # Use PredictorHead for multi-step prediction with sliding window
+                        # Log once per epoch to confirm prediction is running
+                        if data_idx == 0 and epoch % 10 == 0 and verbose:
+                            self.logger.info(f"[Prediction] Running autoregressive prediction (context={self.prediction_context_length}, steps={self.prediction_steps})")
+                        
+                        for nt in self.metadata[0]:
+                            seq = None
+                            if isinstance(proj_seq_dict, dict):
+                                seq = proj_seq_dict.get(nt, None)
+                            elif isinstance(proj_seq_dict, torch.Tensor):
+                                seq = proj_seq_dict
+                            if seq is None or (isinstance(seq, torch.Tensor) and seq.numel() == 0):
+                                continue
+                            if not isinstance(seq, torch.Tensor) or seq.ndim != 3:
+                                continue
+                            
+                            N, T, H = seq.shape
+                            min_required = (self.prediction_context_length or 10) + self.prediction_steps
+                            if T < min_required:
+                                if data_idx == 0 and verbose:
+                                    self.logger.warning(f"[Prediction] Sequence too short for '{nt}': T={T} < {min_required}, skipping")
+                                continue
+                            
+                            # Use sliding window to create multiple training samples
+                            # This enables autoregressive learning across the sequence
+                            context_len = self.prediction_context_length or 50
+                            stride = max(1, self.prediction_steps // 2)  # Overlap windows for more samples
+                            
+                            num_windows = 0
+                            window_loss = torch.tensor(0.0, device=self.device)
+                            
+                            # Slide window across the sequence
+                            for start_idx in range(0, T - context_len - self.prediction_steps + 1, stride):
+                                context_start = start_idx
+                                context_end = start_idx + context_len
+                                target_start = context_end
+                                target_end = context_end + self.prediction_steps
+                                
+                                if target_end > T:
+                                    break
+                                
+                                # Extract context and target
+                                context_seq = seq[:, context_start:context_end, :]
+                                target_seq = seq[:, target_start:target_end, :]
+                                
+                                # Predict using PredictorHead (autoregressive)
+                                predictions, _ = self.predictor(context_seq, return_attention=False)
+                                
+                                # Compute prediction loss for this window
+                                pred_loss = F_nn.mse_loss(predictions, target_seq)
+                                window_loss = window_loss + pred_loss
+                                num_windows += 1
+                            
+                            # Average over all windows
+                            if num_windows > 0:
+                                predictor_loss = predictor_loss + (window_loss / num_windows)
+                                # Log window count on first batch to show prediction is active
+                                if data_idx == 0 and epoch % 10 == 0 and verbose:
+                                    self.logger.info(f"  [{nt}] Trained on {num_windows} prediction windows (MSE={window_loss/num_windows:.6f})")
+                    except Exception as e:
+                        self.logger.error(f"Prediction loss computation failed at epoch {epoch}, batch {data_idx}: {e}")
+                        # Don't fail completely, just skip prediction for this batch
+                        self.logger.warning(f"Skipping prediction loss for this batch due to error")
+                        predictor_loss = torch.tensor(0.0, device=self.device)
+
+                # 5b) Temporal prediction loss (original method)
+                try:
                     for nt in self.metadata[0]:
                         seq = None
                         if isinstance(proj_seq_dict, dict):
@@ -741,84 +872,34 @@ class DynamicHeteroTrainer:
                         if seq is None or (isinstance(seq, torch.Tensor) and seq.numel() == 0):
                             continue
                         if not isinstance(seq, torch.Tensor) or seq.ndim != 3:
-                            continue
-                        
-                        N, T, H = seq.shape
-                        min_required = (self.prediction_context_length or 10) + self.prediction_steps
-                        if T < min_required:
-                            continue
-                        
-                        # Use sliding window to create multiple training samples
-                        # This enables autoregressive learning across the sequence
-                        context_len = self.prediction_context_length or 50
-                        stride = max(1, self.prediction_steps // 2)  # Overlap windows for more samples
-                        
-                        num_windows = 0
-                        window_loss = torch.tensor(0.0, device=self.device)
-                        
-                        # Slide window across the sequence
-                        for start_idx in range(0, T - context_len - self.prediction_steps + 1, stride):
-                            context_start = start_idx
-                            context_end = start_idx + context_len
-                            target_start = context_end
-                            target_end = context_end + self.prediction_steps
-                            
-                            if target_end > T:
-                                break
-                            
-                            # Extract context and target
-                            context_seq = seq[:, context_start:context_end, :]
-                            target_seq = seq[:, target_start:target_end, :]
-                            
-                            # Predict using PredictorHead (autoregressive)
-                            predictions, _ = self.predictor(context_seq, return_attention=False)
-                            
-                            # Compute prediction loss for this window
-                            pred_loss = F_nn.mse_loss(predictions, target_seq)
-                            window_loss = window_loss + pred_loss
-                            num_windows += 1
-                        
-                        # Average over all windows
-                        if num_windows > 0:
-                            predictor_loss = predictor_loss + (window_loss / num_windows)
-                            # Log window count on first batch to show prediction is active
-                            if data_idx == 0 and epoch % 10 == 0 and verbose:
-                                self.logger.info(f"  [{nt}] Trained on {num_windows} prediction windows (MSE={window_loss/num_windows:.6f})")
+                            raise ValueError(f"proj_seq_dict['{nt}'] must be Tensor (N,T,H), got {None if seq is None else tuple(seq.shape)}")
 
-                for nt in self.metadata[0]:
-                    seq = None
-                    if isinstance(proj_seq_dict, dict):
-                        seq = proj_seq_dict.get(nt, None)
-                    elif isinstance(proj_seq_dict, torch.Tensor):
-                        seq = proj_seq_dict
-                    if seq is None or (isinstance(seq, torch.Tensor) and seq.numel() == 0):
-                        continue
-                    if not isinstance(seq, torch.Tensor) or seq.ndim != 3:
-                        raise ValueError(f"proj_seq_dict['{nt}'] must be Tensor (N,T,H), got {None if seq is None else tuple(seq.shape)}")
+                        loss_t, pred_feat, pred_denorm = self._temporal_prediction_loss(
+                            seq, nt, return_preds=True, stats_nt=stats_dict.get(nt, None)
+                        )
+                        temp_loss = temp_loss + loss_t
 
-                    loss_t, pred_feat, pred_denorm = self._temporal_prediction_loss(
-                        seq, nt, return_preds=True, stats_nt=stats_dict.get(nt, None)
-                    )
-                    temp_loss = temp_loss + loss_t
-
-                    # raw 预测 loss
-                    if pred_denorm is not None:
-                        if pred_denorm.ndim != 3:
-                            raise ValueError(f"pred_denorm for '{nt}' must be (N,T_pred,F_raw), got {tuple(pred_denorm.shape)}")
-                        targ_raw = getattr(data[nt], "x_seq", None)
-                        if targ_raw is None:
-                            raise RuntimeError(
-                                f"pred_denorm returned for '{nt}' but data['{nt}'].x_seq is missing (cannot compute raw forecast loss)"
-                            )
-                        Np, Tp, Fp = pred_denorm.shape
-                        Nt, Tt, Ft = targ_raw.shape
-                        common_F = min(Fp, Ft)
-                        if Tt < Tp:
-                            raise ValueError(f"Target length {Tt} < predicted length {Tp} for '{nt}', cannot align")
-                        target_future = targ_raw.to(self.device)[:, -Tp:, :common_F]
-                        pred_crop = pred_denorm[:, :Tp, :common_F].to(self.device)
-                        raw_l = F_nn.mse_loss(pred_crop, target_future)
-                        raw_pred_loss_total = raw_pred_loss_total + raw_l
+                        # raw 预测 loss
+                        if pred_denorm is not None:
+                            if pred_denorm.ndim != 3:
+                                raise ValueError(f"pred_denorm for '{nt}' must be (N,T_pred,F_raw), got {tuple(pred_denorm.shape)}")
+                            targ_raw = getattr(data[nt], "x_seq", None)
+                            if targ_raw is None:
+                                raise RuntimeError(
+                                    f"pred_denorm returned for '{nt}' but data['{nt}'].x_seq is missing (cannot compute raw forecast loss)"
+                                )
+                            Np, Tp, Fp = pred_denorm.shape
+                            Nt, Tt, Ft = targ_raw.shape
+                            common_F = min(Fp, Ft)
+                            if Tt < Tp:
+                                raise ValueError(f"Target length {Tt} < predicted length {Tp} for '{nt}', cannot align")
+                            target_future = targ_raw.to(self.device)[:, -Tp:, :common_F]
+                            pred_crop = pred_denorm[:, :Tp, :common_F].to(self.device)
+                            raw_l = F_nn.mse_loss(pred_crop, target_future)
+                            raw_pred_loss_total = raw_pred_loss_total + raw_l
+                except Exception as e:
+                    self.logger.error(f"Temporal prediction loss computation failed at epoch {epoch}, batch {data_idx}: {e}")
+                    raise RuntimeError(f"Temporal prediction loss computation failed: {e}")
 
                 # 6) 构建 recon_final_map（优先级：recon_feature_dict+denorm → recon_seq_scaled → recon_seq_dict+denorm）
                 recon_final_map: Dict[str, torch.Tensor] = {}
@@ -1005,30 +1086,42 @@ class DynamicHeteroTrainer:
                     loss = loss / self.gradient_accumulation_steps
 
                 # 12) backward + step (with gradient accumulation)
-                if self.use_amp:
-                    self.scaler.scale(loss).backward()
-                    
-                    # Only step optimizer every N accumulation steps
-                    if (data_idx + 1) % self.gradient_accumulation_steps == 0 or (data_idx + 1) == len(self.data_list):
-                        if self.grad_clip > 0:
-                            self.scaler.unscale_(self.optimizer)
-                            params_to_clip = list(self.model.parameters()) + list(self.aligner.parameters())
-                            if self.predictor is not None:
-                                params_to_clip += list(self.predictor.parameters())
-                            torch.nn.utils.clip_grad_norm_(params_to_clip, self.grad_clip)
-                        self.scaler.step(self.optimizer)
-                        self.scaler.update()
-                else:
-                    loss.backward()
-                    
-                    # Only step optimizer every N accumulation steps
-                    if (data_idx + 1) % self.gradient_accumulation_steps == 0 or (data_idx + 1) == len(self.data_list):
-                        if self.grad_clip > 0:
-                            params_to_clip = list(self.model.parameters()) + list(self.aligner.parameters())
-                            if self.predictor is not None:
-                                params_to_clip += list(self.predictor.parameters())
-                            torch.nn.utils.clip_grad_norm_(params_to_clip, self.grad_clip)
-                        self.optimizer.step()
+                try:
+                    if self.use_amp:
+                        self.scaler.scale(loss).backward()
+                        
+                        # Ensure CUDA operations complete if using GPU
+                        if self.device.type == 'cuda':
+                            torch.cuda.synchronize()
+                        
+                        # Only step optimizer every N accumulation steps
+                        if (data_idx + 1) % self.gradient_accumulation_steps == 0 or (data_idx + 1) == len(self.data_list):
+                            if self.grad_clip > 0:
+                                self.scaler.unscale_(self.optimizer)
+                                params_to_clip = list(self.model.parameters()) + list(self.aligner.parameters())
+                                if self.predictor is not None:
+                                    params_to_clip += list(self.predictor.parameters())
+                                torch.nn.utils.clip_grad_norm_(params_to_clip, self.grad_clip)
+                            self.scaler.step(self.optimizer)
+                            self.scaler.update()
+                    else:
+                        loss.backward()
+                        
+                        # Ensure CUDA operations complete if using GPU
+                        if self.device.type == 'cuda':
+                            torch.cuda.synchronize()
+                        
+                        # Only step optimizer every N accumulation steps
+                        if (data_idx + 1) % self.gradient_accumulation_steps == 0 or (data_idx + 1) == len(self.data_list):
+                            if self.grad_clip > 0:
+                                params_to_clip = list(self.model.parameters()) + list(self.aligner.parameters())
+                                if self.predictor is not None:
+                                    params_to_clip += list(self.predictor.parameters())
+                                torch.nn.utils.clip_grad_norm_(params_to_clip, self.grad_clip)
+                            self.optimizer.step()
+                except Exception as e:
+                    self.logger.error(f"Backward/optimization failed at epoch {epoch}, batch {data_idx}: {e}")
+                    raise RuntimeError(f"Backward pass or optimizer step failed: {e}")
 
                 # 13) accumulate stats
                 total_loss += float(loss.detach().cpu())
@@ -1046,6 +1139,7 @@ class DynamicHeteroTrainer:
                     self.logger.info(f"[Train] epoch={epoch} batch=0 recon_losses={recon_losses_per_nt}")
 
             if batches == 0:
+                self.logger.error("[Train] No batches processed in epoch; check data_list and graph_encoder outputs")
                 raise RuntimeError("[Train] No batches processed in epoch; check data_list and graph_encoder outputs")
 
             # 14) epoch-level log & scheduler
