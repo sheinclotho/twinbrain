@@ -1349,9 +1349,21 @@ PORT = 8765  # 改为其他端口
         logger.info("✅ Unity全自动化工作流设置完成！")
         logger.info("="*80)
         logger.info("\n📁 生成的文件夹：")
-        logger.info(f"  - {self.freesurfer_dir.relative_to(self.project_root)}")
-        logger.info(f"  - {self.data_dir.relative_to(self.project_root)}")
-        logger.info(f"  - {self.unity_assets_dir.relative_to(self.project_root)}")
+        
+        # Use absolute paths if can't get relative
+        try:
+            freesurfer_rel = self.freesurfer_dir.relative_to(self.project_root)
+            data_rel = self.data_dir.relative_to(self.project_root)
+            assets_rel = self.unity_assets_dir.relative_to(self.project_root)
+        except ValueError:
+            # If paths are not relative, use absolute paths
+            freesurfer_rel = self.freesurfer_dir
+            data_rel = self.data_dir
+            assets_rel = self.unity_assets_dir
+        
+        logger.info(f"  - {freesurfer_rel}")
+        logger.info(f"  - {data_rel}")
+        logger.info(f"  - {assets_rel}")
         
         logger.info("\n📜 生成的脚本：")
         scripts = list(self.unity_scripts_dir.glob("*.cs"))
@@ -1360,12 +1372,22 @@ PORT = 8765  # 改为其他端口
         
         logger.info("\n🚀 下一步操作：")
         logger.info("  1. [可选] 添加FreeSurfer文件到 freesurfer_files/ 并重新运行")
-        logger.info(f"  2. 启动后端服务器: python {self.output_base.relative_to(self.project_root)}/start_backend_server.py")
-        logger.info(f"  3. 在Unity中导入 {self.unity_assets_dir.relative_to(self.project_root)}/ 文件夹")
+        
+        try:
+            server_rel = (self.output_base / "start_backend_server.py").relative_to(self.project_root)
+            assets_rel2 = self.unity_assets_dir.relative_to(self.project_root)
+            readme_rel = (self.output_base / "README_WORKFLOW.md").relative_to(self.project_root)
+        except ValueError:
+            server_rel = self.output_base / "start_backend_server.py"
+            assets_rel2 = self.unity_assets_dir
+            readme_rel = self.output_base / "README_WORKFLOW.md"
+        
+        logger.info(f"  2. 启动后端服务器: python {server_rel}")
+        logger.info(f"  3. 在Unity中导入 {assets_rel2}/ 文件夹")
         logger.info("  4. 按照 README_WORKFLOW.md 配置Unity场景")
         logger.info("  5. 运行并测试！")
         
-        logger.info(f"\n📖 详细文档: {self.output_base.relative_to(self.project_root)}/README_WORKFLOW.md")
+        logger.info(f"\n📖 详细文档: {readme_rel}")
 
 
 def main():
