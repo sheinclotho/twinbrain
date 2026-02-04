@@ -126,7 +126,8 @@ class PredictorHead(nn.Module):
         # Use gradient checkpointing for memory efficiency during training
         if self.use_gradient_checkpointing and self.training:
             # Wrap GRU call in checkpoint to reduce memory usage
-            _, hidden = checkpoint(self.predictor_gru, context_seq, use_reentrant=False)
+            # Pass None explicitly as hidden state for clarity
+            _, hidden = checkpoint(self.predictor_gru, context_seq, None, use_reentrant=False)
         else:
             _, hidden = self.predictor_gru(context_seq)
         

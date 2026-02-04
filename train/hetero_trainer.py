@@ -783,7 +783,8 @@ class DynamicHeteroTrainer:
                             continue
                             
                         # Use only 2 windows: beginning and end of sequence
-                        window_starts = [0, max_start]
+                        # Sort to ensure proper ordering for loop control
+                        window_starts = sorted([0, max_start])
                         
                         num_windows = 0
                         window_loss = torch.tensor(0.0, device=self.device)
@@ -796,7 +797,7 @@ class DynamicHeteroTrainer:
                             target_end = context_end + self.prediction_steps
                             
                             if target_end > T:
-                                break  # If this window doesn't fit, no subsequent windows will fit either
+                                break  # This and any subsequent windows don't fit
                             
                             # Extract context and target
                             context_seq = seq[:, context_start:context_end, :]
@@ -815,12 +816,13 @@ class DynamicHeteroTrainer:
                         
                         # Average over all windows
                         if num_windows > 0:
-                            predictor_loss = predictor_loss + (window_loss / num_windows)
+                            avg_window_loss = window_loss / num_windows
+                            predictor_loss = predictor_loss + avg_window_loss
                             # Clean up window loss tensor
                             del window_loss
                             # Log window count on first batch to show prediction is active
                             if data_idx == 0 and epoch % 10 == 0 and verbose:
-                                self.logger.info(f"  [{nt}] Trained on {num_windows} prediction windows (reduced for memory efficiency)")
+                                self.logger.info(f"  [{nt}] Trained on {num_windows} prediction windows (avg loss: {float(avg_window_loss):.6f})")
 
                 for nt in self.metadata[0]:
                     seq = None
@@ -1084,8 +1086,12 @@ class DynamicHeteroTrainer:
                 # torch.cuda.empty_cache() allows CUDA to reclaim GPU memory immediately
                 # rather than waiting for the next GC cycle. This is critical for preventing OOM.
                 del loss, align_loss, temp_loss, recon_loss, recon_norm_loss, spec_loss_total
-                if raw_pred_loss_total.numel() != 0:  # Only delete if it exists and is non-empty
-                    del raw_pred_loss_total
+                # Conditionally delete raw_pred_loss_total if it was computed
+                try:
+                    if raw_pred_loss_total.numel() != 0:
+                        del raw_pred_loss_total
+                except (NameError, AttributeError):
+                    pass  # Variable doesn't exist or already deleted
                 if self.enable_prediction:
                     del predictor_loss
                 # Delete other large tensors

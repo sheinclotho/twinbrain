@@ -165,12 +165,10 @@ memory:
   optimize_for_low_memory: true
   use_gradient_checkpointing: true
 ```
-  gradient_accumulation_steps: 2  # Accumulate gradients over 2 steps
-```
 
-This splits the batch into smaller chunks, processes them separately, and accumulates gradients before updating weights.
+### Emergency Options
 
-## Configuration
+If still OOM after above optimizations:
 
 You can control memory management behavior in `config/default.yaml`:
 
