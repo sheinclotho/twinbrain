@@ -2,9 +2,33 @@
 
 基于多模态脑成像数据的数字孪生脑系统，用于大脑活动建模、预测和可视化。
 
+## ⚠️ 重要：正确理解 FreeSurfer 工作流
+
+👉 **[正确工作流程说明](正确工作流程说明.md)** - **必读**：FreeSurfer 与数据加载的正确理解
+
+**关键概念**：
+- **FreeSurfer 文件** = Unity 前端结构（一次性创建）
+- **数据文件夹** = 内容（可随时更换）
+- **不需要两者同时存在**
+
+```
+步骤1: FreeSurfer → Unity 前端结构 (一次性)
+步骤2: 数据文件夹 → JSON → 加载到前端 (可重复)
+步骤3: 交互刺激 → 后端预测 → 实时更新 (可选)
+```
+
 ## 📚 完整文档
 
+👉 **[文档索引](docs/文档索引.md)** - 按需求快速查找文档
+
 ### 主要文档
+
+- **[正确工作流程说明](正确工作流程说明.md)** - **推荐首先阅读** 🆕🆕🆕
+  - 正确理解 FreeSurfer 的作用
+  - 完整工作流程图
+  - 步骤式教程
+  - 常见误解解答
+
 - **[Unity工作流说明](docs/Unity工作流说明.md)** - Unity集成完整指南 🆕
   - 自动化工作流
   - 一键导出（JSON + OBJ）
@@ -12,7 +36,16 @@
   - 前后端实时通信
   - 使用示例和最佳实践
 
-- **[Unity更新说明](docs/Unity更新说明.md)** - Unity功能更新记录 🆕
+- **[FreeSurfer使用指南](docs/FreeSurfer使用指南.md)** - FreeSurfer表面数据支持 🆕🆕
+  - FreeSurfer = 前端结构定义
+  - 加载 FreeSurfer 表面文件（.pial）
+  - 加载注释文件（.annot）
+  - 导出真实大脑表面网格
+  - Python API 和命令行使用
+
+- **[如何使用多个脑模文件](如何使用多个脑模文件.md)** - FreeSurfer 快速答疑 🆕
+  - 直接回答 FreeSurfer 文件使用问题
+  - 工作流程图解
 
 - **[系统使用指南](docs/TwinBrain系统使用指南.md)** - 完整用户手册
   - 安装和配置
@@ -34,6 +67,7 @@
   - ✅ 增强预测能力（已实现）
   - ✅ 训练监控系统（已实现）
   - ✅ Unity工作流自动化（已实现）🆕
+  - ✅ FreeSurfer表面数据支持（已实现）🆕🆕
   - 虚拟刺激和扰动
   - 多模态融合优化
   - 因果推断和网络分析
@@ -91,6 +125,48 @@ results = run_unity_workflow(config)
 ```
 
 **详细说明**: [Unity工作流说明](docs/Unity工作流说明.md)
+
+### 3.5. 使用 FreeSurfer 表面数据 🆕🆕
+
+```python
+from unity_integration import run_unity_workflow, WorkflowConfig
+
+# 使用 FreeSurfer 表面文件
+config = WorkflowConfig(
+    data_source='freesurfer',  # 使用 FreeSurfer 数据源
+    
+    # FreeSurfer 文件路径
+    freesurfer_lh_surface='data/lh.pial',
+    freesurfer_rh_surface='data/rh.pial',
+    freesurfer_lh_annot='data/lh.Schaefer2018_200Parcels_7Networks_order.annot',
+    freesurfer_rh_annot='data/rh.Schaefer2018_200Parcels_7Networks_order.annot',
+    
+    output_dir='output/freesurfer_export',
+    export_formats=['json', 'obj'],
+    export_surface_mesh=True,  # 导出真实的大脑表面网格
+)
+
+results = run_unity_workflow(config)
+
+# 自动生成：
+# - JSON 脑状态文件（基于真实脑区位置）
+# - OBJ 球体模型（200个脑区）
+# - OBJ 表面网格（真实的大脑皮层表面）
+# - unity_config.json（Unity 项目配置）
+```
+
+**或使用命令行**:
+```bash
+python unity_automation.py --freesurfer \
+  --lh-surface data/lh.pial \
+  --rh-surface data/rh.pial \
+  --lh-annot data/lh.Schaefer2018_200Parcels_7Networks_order.annot \
+  --rh-annot data/rh.Schaefer2018_200Parcels_7Networks_order.annot \
+  --export-surface \
+  --output freesurfer_output
+```
+
+**详细说明**: [FreeSurfer使用指南](docs/FreeSurfer使用指南.md)
 
 ### 4. 虚拟刺激模拟
 
@@ -301,24 +377,48 @@ TwinBrain 系统
 
 ---
 
-**最后更新**: 2026-02-01  
-**版本**: 2.2  
+**最后更新**: 2026-02-04  
+**版本**: 2.3  
 **维护者**: TwinBrain Development Team
 
 > "探索意识的本质，理解大脑的奥秘。"
 
 ---
 
-## 🎉 最新更新 (2026-02-02)
+## 🎉 最新更新 (2026-02-04)
 
-### Unity 工作流自动化 🆕
+### FreeSurfer 表面数据支持 🆕🆕
+- ✅ **FreeSurferLoader**: 加载 FreeSurfer 表面文件（.pial）和注释文件（.annot）
+- ✅ **真实大脑表面**: 导出真实的大脑皮层表面网格为 OBJ 格式
+- ✅ **自动提取脑区**: 从 FreeSurfer 分割自动提取脑区位置和网络信息
+- ✅ **完整集成**: 与现有 Unity 工作流无缝集成
+- ✅ **命令行支持**: 通过 unity_automation.py 直接使用 FreeSurfer 数据
+- 📚 详见 [FreeSurfer使用指南](docs/FreeSurfer使用指南.md)
+
+**使用示例**:
+```python
+# 加载 FreeSurfer 表面文件
+config = WorkflowConfig(
+    data_source='freesurfer',
+    freesurfer_lh_surface='lh.pial',
+    freesurfer_rh_surface='rh.pial',
+    freesurfer_lh_annot='lh.Schaefer2018_200Parcels_7Networks_order.annot',
+    freesurfer_rh_annot='rh.Schaefer2018_200Parcels_7Networks_order.annot',
+    export_surface_mesh=True  # 导出真实表面网格
+)
+results = run_unity_workflow(config)
+```
+
+### 之前更新 (2026-02-02)
+
+#### Unity 工作流自动化 🆕
 - ✅ **WorkflowManager**: 一键完成完整工作流
 - ✅ **多格式导出**: JSON + OBJ 同时导出
 - ✅ **自动配置**: Unity配置和材质自动生成
 - ✅ **前后端集成**: WebSocket 实时通信完整实现
 - 📚 详见 [Unity工作流说明](docs/Unity工作流说明.md) 和 [Unity更新说明](docs/Unity更新说明.md)
 
-### 之前更新
+### 更早更新
 - ✅ **多步未来预测**: 实现 PredictorHead 模块
 - ✅ **增强监控**: 完整的训练指标追踪系统
 - ✅ **自动化日志**: MetricsTracker 和 JSON 导出

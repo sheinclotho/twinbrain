@@ -8,12 +8,14 @@ Provides tools for exporting brain data and interacting with Unity frontend:
 - BrainVisualizationServer: Real-time WebSocket communication
 - WorkflowManager: Automated workflow for Unity integration
 - BrainOBJGenerator: Generate 3D OBJ models
+- FreeSurferLoader: Load FreeSurfer surface and annotation files
 """
 
 from .brain_state_exporter import BrainStateExporter
 from .stimulation_simulator import StimulationSimulator, StimulationConfig
 from .workflow_manager import WorkflowManager, WorkflowConfig, run_unity_workflow
 from .obj_generator import BrainOBJGenerator
+from .freesurfer_loader import FreeSurferLoader, load_freesurfer_data
 
 # Import server with error handling
 try:
@@ -32,5 +34,7 @@ __all__ = [
     'WorkflowManager',
     'WorkflowConfig',
     'run_unity_workflow',
+    'FreeSurferLoader',
+    'load_freesurfer_data',
     'SERVER_AVAILABLE',
 ]

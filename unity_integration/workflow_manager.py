@@ -8,6 +8,7 @@ Unity 工作流管理器
 3. 模型推理
 4. 导出为多种格式（JSON, OBJ）
 5. 生成Unity配置
+6. 支持FreeSurfer surface文件导入
 """
 
 import json
@@ -21,14 +22,21 @@ from datetime import datetime
 
 from .brain_state_exporter import BrainStateExporter
 from .obj_generator import BrainOBJGenerator
+from .freesurfer_loader import FreeSurferLoader, load_freesurfer_data
 
 
 @dataclass
 class WorkflowConfig:
     """工作流配置"""
     # 输入数据路径
-    data_source: str = "local"  # 'local', 'download', 'model'
+    data_source: str = "local"  # 'local', 'download', 'model', 'example', 'freesurfer'
     data_path: Optional[str] = None
+    
+    # FreeSurfer specific paths (for data_source='freesurfer')
+    freesurfer_lh_surface: Optional[str] = None  # Path to lh.pial
+    freesurfer_rh_surface: Optional[str] = None  # Path to rh.pial
+    freesurfer_lh_annot: Optional[str] = None    # Path to lh annotation file
+    freesurfer_rh_annot: Optional[str] = None    # Path to rh annotation file
     
     # 输出配置
     output_dir: str = "output/unity_export"
@@ -43,6 +51,7 @@ class WorkflowConfig:
     export_connectivity: bool = True
     export_networks: bool = True
     export_obj_per_frame: bool = False  # 每帧导出独立OBJ
+    export_surface_mesh: bool = False   # Export FreeSurfer surface mesh (if available)
     
     # Unity配置
     generate_unity_config: bool = True
@@ -85,9 +94,16 @@ class WorkflowManager:
             model: 训练好的模型（可选）
         """
         self.config = config or WorkflowConfig()
-        self.atlas_info = atlas_info or self._load_default_atlas()
         self.model = model
         self.logger = logging.getLogger(__name__)
+        self.freesurfer_loader = None  # Will be initialized if using FreeSurfer data
+        
+        # Load or generate atlas info based on data source
+        if self.config.data_source == 'freesurfer' and atlas_info is None:
+            # Load atlas from FreeSurfer files
+            self.atlas_info = self._load_freesurfer_atlas()
+        else:
+            self.atlas_info = atlas_info or self._load_default_atlas()
         
         # 创建导出器
         self.exporter = BrainStateExporter(
@@ -137,6 +153,12 @@ class WorkflowManager:
                 results['output_files'].extend(obj_files)
                 results['steps_completed'].append('export_obj')
             
+            # 步骤3.5: 导出FreeSurfer surface mesh（如果有）
+            if self.config.export_surface_mesh and self.freesurfer_loader is not None:
+                surface_files = self._step_export_surface_mesh()
+                results['output_files'].extend(surface_files)
+                results['steps_completed'].append('export_surface_mesh')
+            
             # 步骤4: 生成Unity配置
             if self.config.generate_unity_config:
                 config_file = self._step_generate_unity_config()
@@ -176,6 +198,8 @@ class WorkflowManager:
             return self._generate_from_model()
         elif self.config.data_source == 'example':
             return self._generate_example_data()
+        elif self.config.data_source == 'freesurfer':
+            return self._load_freesurfer_data()
         else:
             # Default to example data for any unknown source
             self.logger.warning(f"未知的数据源 '{self.config.data_source}'，使用示例数据")
@@ -465,6 +489,108 @@ class WorkflowManager:
             }
         
         return atlas_info
+    
+    def _load_freesurfer_atlas(self) -> Dict[str, Any]:
+        """从FreeSurfer文件加载脑图谱信息"""
+        if not all([
+            self.config.freesurfer_lh_surface,
+            self.config.freesurfer_rh_surface,
+            self.config.freesurfer_lh_annot,
+            self.config.freesurfer_rh_annot
+        ]):
+            raise ValueError(
+                "使用FreeSurfer数据源时，必须提供所有FreeSurfer文件路径：\n"
+                "- freesurfer_lh_surface (lh.pial)\n"
+                "- freesurfer_rh_surface (rh.pial)\n"
+                "- freesurfer_lh_annot (lh annotation file)\n"
+                "- freesurfer_rh_annot (rh annotation file)"
+            )
+        
+        self.logger.info("从FreeSurfer文件加载图谱...")
+        
+        # Use the convenience function to load FreeSurfer data
+        atlas_info, loader = load_freesurfer_data(
+            lh_surface=self.config.freesurfer_lh_surface,
+            rh_surface=self.config.freesurfer_rh_surface,
+            lh_annot=self.config.freesurfer_lh_annot,
+            rh_annot=self.config.freesurfer_rh_annot,
+            atlas_name=self.config.atlas_name
+        )
+        
+        # Store the loader for later use (e.g., for exporting surface mesh)
+        self.freesurfer_loader = loader
+        
+        self.logger.info(f"✓ 从FreeSurfer加载了 {atlas_info['n_regions']} 个脑区")
+        return atlas_info
+    
+    def _load_freesurfer_data(self) -> tuple:
+        """加载FreeSurfer数据并生成示例活动数据"""
+        # Atlas info should already be loaded during __init__
+        if self.atlas_info is None or self.freesurfer_loader is None:
+            raise ValueError("FreeSurfer atlas not loaded properly")
+        
+        n_regions = self.atlas_info['n_regions']
+        n_timepoints = self.config.end_time or 200
+        n_features = 1
+        
+        # NOTE: This generates PLACEHOLDER activity data for demonstration
+        # In real usage, you should replace this with actual brain activity data:
+        # 
+        # Example for loading real data:
+        # -----------------------------
+        # fmri_data = load_your_fmri_data()  # Shape: [n_regions, n_timepoints, n_features]
+        # eeg_data = load_your_eeg_data()    # Shape: [n_regions, n_timepoints, n_features]
+        # 
+        # Data format requirements:
+        # - fmri_data: torch.Tensor, shape [n_regions, n_timepoints, features]
+        # - eeg_data: torch.Tensor, shape [n_regions, n_timepoints, features]
+        # - Values should be normalized (e.g., z-scored)
+        # - n_regions must match the number of regions in FreeSurfer atlas
+        # 
+        self.logger.info("生成示例活动数据（实际使用时应加载真实数据）...")
+        self.logger.info(f"  需要加载: [{n_regions} regions, {n_timepoints} timepoints, {n_features} features]")
+        fmri_data = torch.randn(n_regions, n_timepoints, n_features)
+        eeg_data = torch.randn(n_regions, n_timepoints, n_features)
+        
+        brain_data = {
+            'fmri': fmri_data,
+            'eeg': eeg_data
+        }
+        
+        # Generate example connectivity matrix
+        # In real usage, load actual structural or functional connectivity:
+        # connectivity_matrix = load_your_connectivity_data()  # Shape: [n_regions, n_regions]
+        connectivity_matrix = np.random.rand(n_regions, n_regions)
+        connectivity_matrix = (connectivity_matrix + connectivity_matrix.T) / 2
+        # Threshold at 0.7 to keep only strong connections (adjust based on your data)
+        connectivity_matrix[connectivity_matrix < 0.7] = 0
+        
+        connectivity = {
+            'structural': connectivity_matrix
+        }
+        
+        return brain_data, connectivity
+    
+    def _step_export_surface_mesh(self) -> List[str]:
+        """步骤3.5: 导出FreeSurfer surface mesh"""
+        self.logger.info("步骤3.5: 导出FreeSurfer表面网格...")
+        
+        if self.freesurfer_loader is None:
+            self.logger.warning("没有加载FreeSurfer数据，跳过表面网格导出")
+            return []
+        
+        obj_dir = self.output_dir / "obj"
+        obj_dir.mkdir(exist_ok=True)
+        
+        # Export surface mesh
+        exported_files = self.freesurfer_loader.export_surfaces_as_obj(
+            output_dir=obj_dir,
+            combine_hemispheres=True  # Export as single file
+        )
+        
+        self.logger.info(f"  ✓ 导出了 {len(exported_files)} 个表面网格文件")
+        return [str(f.relative_to(self.output_dir)) for f in exported_files]
+
     
     def _assign_network(self, region_id: int) -> str:
         """为脑区分配网络"""

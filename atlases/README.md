@@ -1,6 +1,9 @@
-# Nilearn data folder
+# Nilearn 数据文件夹
 
-This directory is used by Nilearn to store datasets
-and atlases downloaded from the internet.
-It can be safely deleted.
-If you delete it, previously downloaded data will be downloaded again.
+此目录由 Nilearn 库用于存储数据集。
+
+## 说明
+
+当使用 Nilearn 功能（如加载标准脑图谱或参考数据）时，下载的数据会自动缓存在此目录中。
+
+这避免了重复下载，提高了性能。
