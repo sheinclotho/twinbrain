@@ -1156,8 +1156,10 @@ class DynamicHeteroTrainer:
                 self.logger.debug(traceback.format_exc())
             finally:
                 # Clean up recon_final_map after use to free memory
-                if 'recon_final_map' in locals():
+                try:
                     del recon_final_map
+                except NameError:
+                    pass  # recon_final_map was not defined
 
             # New: Log metrics
             if self.metrics_tracker is not None:

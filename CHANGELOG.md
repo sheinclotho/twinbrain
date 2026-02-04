@@ -10,8 +10,8 @@
 - 影响训练指标的完整性
 
 #### 根本原因
-- `recon_final_map` 在每个 batch 结束时被删除 (line 1099)
-- 但在 epoch 结束后需要使用它计算相对误差 (line 1151)
+- `recon_final_map` 在每个 batch 结束时被删除
+- 但在 epoch 结束后需要使用它计算相对误差
 - 导致 `NameError` 或 `UnboundLocalError`
 - 异常处理不完善，缺少详细的错误信息
 
