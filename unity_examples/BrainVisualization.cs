@@ -3,17 +3,19 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using Newtonsoft.Json;
+using TwinBrain;
 
 /// <summary>
-/// TwinBrain Unity Visualization Component
+/// TwinBrain Unity可视化组件
 /// 
-/// This script loads and visualizes brain state JSON files from TwinBrain.
-/// Attach this to a GameObject in your Unity scene.
+/// 此脚本从TwinBrain加载并可视化大脑状态JSON文件。
+/// 将此脚本附加到Unity场景中的GameObject上。
 /// 
-/// Requirements:
-/// - Newtonsoft.Json (install via Package Manager)
-/// - Brain region prefabs with Renderer component
-/// - Connection line prefabs
+/// 依赖项:
+/// - Newtonsoft.Json（通过Package Manager安装）
+/// - 带有Renderer组件的脑区预制体
+/// - 连接线预制体
+/// - BrainDataStructures.cs（数据结构定义）
 /// </summary>
 public class BrainVisualization : MonoBehaviour
 {
@@ -100,7 +102,7 @@ public class BrainVisualization : MonoBehaviour
     }
     
     /// <summary>
-    /// Load a single brain state from JSON file
+    /// 从JSON文件加载单个大脑状态
     /// </summary>
     public void LoadSingleState(string path)
     {
@@ -120,7 +122,7 @@ public class BrainVisualization : MonoBehaviour
     }
     
     /// <summary>
-    /// Load a sequence of brain states
+    /// 加载大脑状态序列
     /// </summary>
     public void LoadSequence()
     {
@@ -159,7 +161,7 @@ public class BrainVisualization : MonoBehaviour
     }
     
     /// <summary>
-    /// Update visualization with current state
+    /// 使用当前状态更新可视化
     /// </summary>
     void UpdateVisualization()
     {
@@ -188,7 +190,7 @@ public class BrainVisualization : MonoBehaviour
     }
     
     /// <summary>
-    /// Create a brain region visualization
+    /// 创建脑区可视化
     /// </summary>
     void CreateRegion(RegionData region)
     {
@@ -236,7 +238,7 @@ public class BrainVisualization : MonoBehaviour
     }
     
     /// <summary>
-    /// Create a connection visualization
+    /// 创建连接可视化
     /// </summary>
     void CreateConnection(ConnectionData conn)
     {
@@ -274,7 +276,7 @@ public class BrainVisualization : MonoBehaviour
     }
     
     /// <summary>
-    /// Clear all visualizations
+    /// 清除所有可视化
     /// </summary>
     void ClearVisualization()
     {
@@ -294,7 +296,7 @@ public class BrainVisualization : MonoBehaviour
     }
     
     /// <summary>
-    /// Play sequence animation
+    /// 播放序列动画
     /// </summary>
     public void Play()
     {
@@ -305,7 +307,7 @@ public class BrainVisualization : MonoBehaviour
     }
     
     /// <summary>
-    /// Pause sequence animation
+    /// 暂停序列动画
     /// </summary>
     public void Pause()
     {
@@ -313,7 +315,7 @@ public class BrainVisualization : MonoBehaviour
     }
     
     /// <summary>
-    /// Reload current state
+    /// 重新加载当前状态
     /// </summary>
     public void Reload()
     {
@@ -328,7 +330,7 @@ public class BrainVisualization : MonoBehaviour
     }
     
     /// <summary>
-    /// Coroutine for playing sequence
+    /// 播放序列的协程
     /// </summary>
     IEnumerator PlaySequence()
     {
@@ -347,110 +349,4 @@ public class BrainVisualization : MonoBehaviour
         
         isPlaying = false;
     }
-}
-
-// Data classes matching TwinBrain JSON format
-[System.Serializable]
-public class BrainStateData
-{
-    public string version;
-    public string timestamp;
-    public MetadataData metadata;
-    public BrainState brain_state;
-    public StimulationData stimulation;
-}
-
-[System.Serializable]
-public class MetadataData
-{
-    public string subject;
-    public string atlas;
-    public string model_version;
-    public int time_point;
-    public float time_second;
-}
-
-[System.Serializable]
-public class BrainState
-{
-    public int time_point;
-    public float time_second;
-    public List<RegionData> regions;
-    public List<ConnectionData> connections;
-    public GlobalMetrics global_metrics;
-}
-
-[System.Serializable]
-public class RegionData
-{
-    public int id;
-    public string label;
-    public PositionData position;
-    public ActivityData activity;
-}
-
-[System.Serializable]
-public class PositionData
-{
-    public float x;
-    public float y;
-    public float z;
-}
-
-[System.Serializable]
-public class ActivityData
-{
-    public FMRIActivity fmri;
-    public EEGActivity eeg;
-}
-
-[System.Serializable]
-public class FMRIActivity
-{
-    public float amplitude;
-    public float raw_value;
-}
-
-[System.Serializable]
-public class EEGActivity
-{
-    public float amplitude;
-    public float raw_value;
-}
-
-[System.Serializable]
-public class ConnectionData
-{
-    public int source;
-    public int target;
-    public float strength;
-    public string type;
-}
-
-[System.Serializable]
-public class GlobalMetrics
-{
-    public float mean_activity;
-    public float std_activity;
-    public float max_activity;
-    public int active_regions;
-}
-
-[System.Serializable]
-public class StimulationData
-{
-    public bool active;
-    public List<int> target_regions;
-    public float amplitude;
-}
-
-[System.Serializable]
-public class SequenceIndex
-{
-    public string subject;
-    public int start;
-    public int end;
-    public int step;
-    public int n_frames;
-    public List<string> files;
 }
