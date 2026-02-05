@@ -3,26 +3,27 @@ using System.Collections.Generic;
 using System.IO;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using TwinBrain;
 
 /// <summary>
-/// TwinBrain Unity Configuration Loader
+/// TwinBrain Unity配置加载器
 /// 
-/// Automatically loads and applies configuration from unity_config.json.
-/// This enhances the BrainVisualization script with auto-configuration.
+/// 自动加载并应用unity_config.json配置。
+/// 增强BrainVisualization脚本的自动配置功能。
 /// 
-/// Usage:
-/// 1. Attach this script to your BrainVisualization GameObject
-/// 2. Point it to the unity_config.json file
-/// 3. It will automatically configure the BrainVisualization component
+/// 使用方法:
+/// 1. 将此脚本附加到BrainVisualization GameObject
+/// 2. 指向unity_config.json文件
+/// 3. 它将自动配置BrainVisualization组件
 /// </summary>
 [RequireComponent(typeof(BrainVisualization))]
 public class BrainConfigLoader : MonoBehaviour
 {
     [Header("Configuration File")]
-    [Tooltip("Path to unity_config.json")]
+    [Tooltip("unity_config.json的路径")]
     public string configPath = "output/unity/unity_config.json";
     
-    [Tooltip("Auto-load configuration on start")]
+    [Tooltip("启动时自动加载配置")]
     public bool autoLoad = true;
     
     private BrainVisualization visualization;
@@ -45,7 +46,7 @@ public class BrainConfigLoader : MonoBehaviour
     }
     
     /// <summary>
-    /// Load and apply configuration from JSON file
+    /// 从JSON文件加载并应用配置
     /// </summary>
     public void LoadConfiguration()
     {
@@ -135,7 +136,7 @@ public class BrainConfigLoader : MonoBehaviour
     }
     
     /// <summary>
-    /// Parse color from JSON
+    /// 从JSON解析颜色
     /// </summary>
     private Color ParseColor(JToken colorData)
     {
@@ -146,81 +147,4 @@ public class BrainConfigLoader : MonoBehaviour
         
         return new Color(r, g, b, a);
     }
-}
-
-/// <summary>
-/// Data class for Unity configuration
-/// </summary>
-[System.Serializable]
-public class UnityConfig
-{
-    public string project_name;
-    public string atlas;
-    public DataPaths data_paths;
-    public VisualizationSettings visualization;
-    public ColorSettings colors;
-    public AnimationSettings animation;
-}
-
-[System.Serializable]
-public class DataPaths
-{
-    public string json_dir;
-    public string obj_dir;
-    public string materials_dir;
-}
-
-[System.Serializable]
-public class VisualizationSettings
-{
-    public float region_scale;
-    public float activity_threshold;
-    public float connection_threshold;
-    public bool show_connections;
-    public int fps;
-    public bool auto_play;
-}
-
-[System.Serializable]
-public class ColorSettings
-{
-    public ColorRGB low_activity;
-    public ColorRGB high_activity;
-    public ColorRGBA connection_structural;
-    public ColorRGBA connection_functional;
-}
-
-[System.Serializable]
-public class ColorRGB
-{
-    public int r;
-    public int g;
-    public int b;
-    
-    public Color ToUnityColor()
-    {
-        return new Color(r / 255f, g / 255f, b / 255f);
-    }
-}
-
-[System.Serializable]
-public class ColorRGBA
-{
-    public int r;
-    public int g;
-    public int b;
-    public int a;
-    
-    public Color ToUnityColor()
-    {
-        return new Color(r / 255f, g / 255f, b / 255f, a / 255f);
-    }
-}
-
-[System.Serializable]
-public class AnimationSettings
-{
-    public int start_frame;
-    public int end_frame;
-    public int frame_step;
 }

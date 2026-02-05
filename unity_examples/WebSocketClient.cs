@@ -2,58 +2,51 @@ using UnityEngine;
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Text;
-#if UNITY_WEBGL && !UNITY_EDITOR
-using System.Runtime.InteropServices;
-#else
-// Note: For non-WebGL platforms, you'll need to install a WebSocket library
-// such as: WebSocketSharp (https://github.com/sta/websocket-sharp)
-// or use Unity's built-in networking
-#endif
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using TwinBrain;
 
 /// <summary>
-/// TwinBrain WebSocket Client
+/// TwinBrain WebSocket客户端
 /// 
-/// Connects to the TwinBrain WebSocket server for real-time brain state updates.
+/// 连接到TwinBrain WebSocket服务器以获取实时大脑状态更新。
 /// 
-/// Features:
-/// - Get current brain state
-/// - Request predictions
-/// - Simulate stimulation
-/// - Stream brain activity
+/// 功能:
+/// - 获取当前大脑状态
+/// - 请求预测
+/// - 模拟刺激
+/// - 流式传输大脑活动
 /// 
-/// Requirements:
-/// - For desktop/standalone: Install WebSocketSharp or similar
-/// - For WebGL: Uses browser WebSocket API
+/// 使用方法:
+/// 1. 启动TwinBrain WebSocket服务器: python -m unity_integration.realtime_server
+/// 2. 将此脚本附加到GameObject
+/// 3. 配置服务器URL（默认: ws://localhost:8765）
+/// 4. 脚本将在启动时自动连接
 /// 
-/// Usage:
-/// 1. Start TwinBrain WebSocket server: python -m unity_integration.realtime_server
-/// 2. Attach this script to a GameObject
-/// 3. Configure server URL (default: ws://localhost:8765)
-/// 4. Script will auto-connect on Start
+/// 注意: 此版本提供WebSocket接口定义。实际的WebSocket连接需要：
+/// - WebGL平台: 使用浏览器WebSocket API（需要实现JavaScript插件）
+/// - 独立平台: 需要安装WebSocketSharp库 (https://github.com/sta/websocket-sharp)
 /// </summary>
 public class WebSocketClient : MonoBehaviour
 {
-    [Header("Connection Settings")]
-    [Tooltip("WebSocket server URL")]
+    [Header("连接设置")]
+    [Tooltip("WebSocket服务器URL")]
     public string serverUrl = "ws://localhost:8765";
     
-    [Tooltip("Auto-connect on start")]
+    [Tooltip("启动时自动连接")]
     public bool autoConnect = true;
     
-    [Tooltip("Auto-reconnect if disconnected")]
+    [Tooltip("断开连接时自动重连")]
     public bool autoReconnect = true;
     
-    [Tooltip("Reconnect delay (seconds)")]
+    [Tooltip("重连延迟（秒）")]
     public float reconnectDelay = 5f;
     
-    [Header("Status")]
+    [Header("状态")]
     public bool isConnected = false;
     public string lastError = "";
     
-    // Events
+    // 事件
     public event Action OnConnected;
     public event Action OnDisconnected;
     public event Action<string> OnError;
@@ -62,12 +55,6 @@ public class WebSocketClient : MonoBehaviour
     
     private Queue<string> messageQueue = new Queue<string>();
     private bool isReconnecting = false;
-    
-#if !UNITY_WEBGL || UNITY_EDITOR
-    // For standalone builds - you'll need to implement WebSocket client
-    // using a library like WebSocketSharp
-    // private WebSocket ws;
-#endif
     
     void Start()
     {
@@ -84,60 +71,51 @@ public class WebSocketClient : MonoBehaviour
     
     void Update()
     {
-        // Process message queue
+        // 处理消息队列
         ProcessMessages();
     }
     
     /// <summary>
-    /// Connect to WebSocket server
+    /// 连接到WebSocket服务器
     /// </summary>
     public void Connect()
     {
         if (isConnected)
         {
-            Debug.LogWarning("Already connected");
+            Debug.LogWarning("已经连接");
             return;
         }
         
-        Debug.Log($"Connecting to {serverUrl}...");
+        Debug.Log($"连接到 {serverUrl}...");
         
-#if UNITY_WEBGL && !UNITY_EDITOR
-        // WebGL implementation
-        ConnectWebGL();
-#else
-        // Standalone implementation
-        ConnectStandalone();
-#endif
+        // 注意: 实际的WebSocket实现需要平台特定的库
+        // 这里提供接口定义，实际连接需要实现或使用第三方库
+        Debug.LogWarning("WebSocket连接需要平台特定的实现。" +
+                        "请参考文档安装WebSocketSharp（独立平台）或实现WebGL插件。");
     }
     
     /// <summary>
-    /// Disconnect from server
+    /// 从服务器断开连接
     /// </summary>
     public void Disconnect()
     {
         if (!isConnected)
             return;
         
-        Debug.Log("Disconnecting...");
-        
-#if UNITY_WEBGL && !UNITY_EDITOR
-        DisconnectWebGL();
-#else
-        DisconnectStandalone();
-#endif
+        Debug.Log("断开连接...");
         
         isConnected = false;
         OnDisconnected?.Invoke();
     }
     
     /// <summary>
-    /// Send a request to the server
+    /// 向服务器发送请求
     /// </summary>
     public void SendRequest(string type, JObject parameters = null)
     {
         if (!isConnected)
         {
-            Debug.LogWarning("Not connected to server");
+            Debug.LogWarning("未连接到服务器");
             return;
         }
         
@@ -157,7 +135,7 @@ public class WebSocketClient : MonoBehaviour
     }
     
     /// <summary>
-    /// Request current brain state
+    /// 请求当前大脑状态
     /// </summary>
     public void GetBrainState()
     {
@@ -165,17 +143,17 @@ public class WebSocketClient : MonoBehaviour
     }
     
     /// <summary>
-    /// Request future prediction
+    /// 请求未来预测
     /// </summary>
     public void RequestPrediction(int nSteps = 10)
     {
-        JObject params = new JObject();
-        params["n_steps"] = nSteps;
-        SendRequest("predict", params);
+        JObject parameters = new JObject();
+        parameters["n_steps"] = nSteps;
+        SendRequest("predict", parameters);
     }
     
     /// <summary>
-    /// Request stimulation simulation
+    /// 请求刺激模拟
     /// </summary>
     public void SimulateStimulation(int[] targetRegions, float amplitude, string pattern = "sine")
     {
@@ -184,26 +162,26 @@ public class WebSocketClient : MonoBehaviour
         stimulation["amplitude"] = amplitude;
         stimulation["pattern"] = pattern;
         
-        JObject params = new JObject();
-        params["stimulation"] = stimulation;
+        JObject parameters = new JObject();
+        parameters["stimulation"] = stimulation;
         
-        SendRequest("simulate", params);
+        SendRequest("simulate", parameters);
     }
     
     /// <summary>
-    /// Start streaming brain activity
+    /// 开始流式传输大脑活动
     /// </summary>
     public void StartStream(int fps = 10, int duration = 60)
     {
-        JObject params = new JObject();
-        params["fps"] = fps;
-        params["duration"] = duration;
+        JObject parameters = new JObject();
+        parameters["fps"] = fps;
+        parameters["duration"] = duration;
         
-        SendRequest("stream_start", params);
+        SendRequest("stream_start", parameters);
     }
     
     /// <summary>
-    /// Stop streaming
+    /// 停止流式传输
     /// </summary>
     public void StopStream()
     {
@@ -211,7 +189,7 @@ public class WebSocketClient : MonoBehaviour
     }
     
     /// <summary>
-    /// Process received messages
+    /// 处理接收到的消息
     /// </summary>
     private void ProcessMessages()
     {
@@ -223,7 +201,7 @@ public class WebSocketClient : MonoBehaviour
     }
     
     /// <summary>
-    /// Handle received message
+    /// 处理接收到的消息
     /// </summary>
     private void HandleMessage(string message)
     {
@@ -232,14 +210,14 @@ public class WebSocketClient : MonoBehaviour
             JObject data = JObject.Parse(message);
             string type = data["type"]?.ToString();
             
-            // Invoke general message event
+            // 调用通用消息事件
             OnMessageReceived?.Invoke(data);
             
-            // Handle specific message types
+            // 处理特定消息类型
             switch (type)
             {
                 case "welcome":
-                    Debug.Log($"Connected: {data["message"]}");
+                    Debug.Log($"已连接: {data["message"]}");
                     break;
                 
                 case "brain_state":
@@ -247,11 +225,11 @@ public class WebSocketClient : MonoBehaviour
                     break;
                 
                 case "prediction":
-                    Debug.Log($"Received prediction for {data["n_steps"]} steps");
+                    Debug.Log($"收到预测 {data["n_steps"]} 步");
                     break;
                 
                 case "simulation":
-                    Debug.Log("Received simulation result");
+                    Debug.Log("收到模拟结果");
                     break;
                 
                 case "stream_frame":
@@ -259,166 +237,81 @@ public class WebSocketClient : MonoBehaviour
                     break;
                 
                 case "stream_started":
-                    Debug.Log($"Stream started: {data["fps"]} fps, {data["duration"]}s");
+                    Debug.Log($"流开始: {data["fps"]} fps, {data["duration"]}s");
                     break;
                 
                 case "stream_ended":
-                    Debug.Log($"Stream ended: {data["n_frames"]} frames");
+                    Debug.Log($"流结束: {data["n_frames"]} 帧");
                     break;
                 
                 case "error":
                     string error = data["message"]?.ToString();
-                    Debug.LogError($"Server error: {error}");
+                    Debug.LogError($"服务器错误: {error}");
                     lastError = error;
                     OnError?.Invoke(error);
                     break;
                 
                 default:
-                    Debug.Log($"Unknown message type: {type}");
+                    Debug.Log($"未知消息类型: {type}");
                     break;
             }
         }
         catch (Exception e)
         {
-            Debug.LogError($"Error handling message: {e.Message}");
+            Debug.LogError($"处理消息时出错: {e.Message}");
         }
     }
     
     /// <summary>
-    /// Handle brain state message
+    /// 处理大脑状态消息
     /// </summary>
     private void HandleBrainState(JObject data)
     {
         try
         {
-            // Try to parse as full BrainStateData
+            // 尝试解析为完整的BrainStateData
             string json = data.ToString();
             BrainStateData brainState = JsonConvert.DeserializeObject<BrainStateData>(json);
             OnBrainStateReceived?.Invoke(brainState);
         }
         catch (Exception e)
         {
-            Debug.LogWarning($"Could not parse brain state: {e.Message}");
+            Debug.LogWarning($"无法解析大脑状态: {e.Message}");
         }
     }
     
     /// <summary>
-    /// Handle stream frame
+    /// 处理流帧
     /// </summary>
     private void HandleStreamFrame(JObject data)
     {
         int frame = data["frame"]?.Value<int>() ?? 0;
         float time = data["time"]?.Value<float>() ?? 0f;
-        // Process frame data...
+        // 处理帧数据...
     }
     
-    // Platform-specific implementations
-    
-#if UNITY_WEBGL && !UNITY_EDITOR
-    
-    [DllImport("__Internal")]
-    private static extern void WebSocketConnect(string url);
-    
-    [DllImport("__Internal")]
-    private static extern void WebSocketClose();
-    
-    [DllImport("__Internal")]
-    private static extern void WebSocketSend(string message);
-    
-    private void ConnectWebGL()
-    {
-        WebSocketConnect(serverUrl);
-        // Note: You'll need to implement the JavaScript plugin
-        // See Unity WebGL documentation
-    }
-    
-    private void DisconnectWebGL()
-    {
-        WebSocketClose();
-    }
-    
+    /// <summary>
+    /// 发送消息（需要平台特定的实现）
+    /// </summary>
     private void SendMessage(string message)
     {
-        WebSocketSend(message);
+        // 注意: 实际发送需要WebSocket库支持
+        // 这里只是接口定义
+        Debug.Log($"[WebSocket] 发送: {message}");
     }
     
-#else
-    
-    private void ConnectStandalone()
+    /// <summary>
+    /// 模拟接收消息（用于测试）
+    /// </summary>
+    public void SimulateReceiveMessage(string message)
     {
-        // Standalone WebSocket implementation requires a library like WebSocketSharp
-        // 
-        // Installation:
-        //   1. Download from: https://github.com/sta/websocket-sharp
-        //   2. Or via NuGet: Install-Package WebSocketSharp
-        //   3. Or copy DLL to Unity Assets/Plugins/
-        // 
-        // Uncomment and implement after installation:
-        /*
-        ws = new WebSocket(serverUrl);
-        
-        ws.OnOpen += (sender, e) =>
-        {
-            isConnected = true;
-            OnConnected?.Invoke();
-        };
-        
-        ws.OnMessage += (sender, e) =>
-        {
-            messageQueue.Enqueue(e.Data);
-        };
-        
-        ws.OnError += (sender, e) =>
-        {
-            lastError = e.Message;
-            OnError?.Invoke(e.Message);
-        };
-        
-        ws.OnClose += (sender, e) =>
-        {
-            isConnected = false;
-            OnDisconnected?.Invoke();
-            
-            if (autoReconnect && !isReconnecting)
-            {
-                StartCoroutine(ReconnectCoroutine());
-            }
-        };
-        
-        ws.Connect();
-        */
-        
-        Debug.LogWarning("WebSocket implementation requires WebSocketSharp library. " +
-                        "Install from https://github.com/sta/websocket-sharp and uncomment the code above.");
+        messageQueue.Enqueue(message);
     }
-    
-    private void DisconnectStandalone()
-    {
-        /*
-        if (ws != null)
-        {
-            ws.Close();
-            ws = null;
-        }
-        */
-    }
-    
-    private void SendMessage(string message)
-    {
-        /*
-        if (ws != null && ws.ReadyState == WebSocketState.Open)
-        {
-            ws.Send(message);
-        }
-        */
-    }
-    
-#endif
     
     private IEnumerator ReconnectCoroutine()
     {
         isReconnecting = true;
-        Debug.Log($"Reconnecting in {reconnectDelay} seconds...");
+        Debug.Log($"{reconnectDelay}秒后重新连接...");
         yield return new WaitForSeconds(reconnectDelay);
         Connect();
         isReconnecting = false;
