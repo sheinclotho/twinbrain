@@ -26,19 +26,19 @@ class BrainOBJGenerator:
     
     def __init__(
         self,
-        atlas_info: Dict[str, Any],
+        atlas_info: Optional[Dict[str, Any]] = None,
         sphere_resolution: int = 16
     ):
         """
         Initialize OBJ generator.
         
         Args:
-            atlas_info: Brain atlas information
+            atlas_info: Brain atlas information (optional if providing coordinates directly)
             sphere_resolution: Number of segments for sphere (higher = smoother)
         """
-        self.atlas_info = atlas_info
+        self.atlas_info = atlas_info or {}
         self.sphere_resolution = sphere_resolution
-        self.regions_info = atlas_info.get('regions', {})
+        self.regions_info = self.atlas_info.get('regions', {})
     
     def generate_sphere_vertices(
         self,
@@ -101,6 +101,7 @@ class BrainOBJGenerator:
         self,
         output_path: Path,
         activity_data: Optional[torch.Tensor] = None,
+        region_positions: Optional[Dict[int, np.ndarray]] = None,
         min_radius: float = 1.5,
         max_radius: float = 4.0,
         include_all_regions: bool = True
@@ -111,6 +112,7 @@ class BrainOBJGenerator:
         Args:
             output_path: Output OBJ file path
             activity_data: Optional activity values for each region [N_regions, ...]
+            region_positions: Optional dict mapping region_id to [x,y,z] position (overrides atlas)
             min_radius: Minimum sphere radius
             max_radius: Maximum sphere radius (for high activity)
             include_all_regions: Include all regions regardless of activity
@@ -129,11 +131,24 @@ class BrainOBJGenerator:
             vertex_offset = 1  # OBJ indices start at 1
             
             # Process each region
-            for region_id, region_info in self.regions_info.items():
-                region_idx = int(region_id) - 1
+            # Use provided positions or fall back to atlas info
+            if region_positions:
+                regions_to_process = region_positions.items()
+            else:
+                regions_to_process = [(int(rid), info) for rid, info in self.regions_info.items()]
+            
+            for region_id, region_data in regions_to_process:
+                if isinstance(region_data, dict):
+                    # From atlas info
+                    region_idx = region_id - 1
+                    xyz = region_data.get('xyz', [0, 0, 0])
+                    label = region_data.get('label', f'Region_{region_id}')
+                else:
+                    # Direct position array
+                    region_idx = region_id - 1
+                    xyz = region_data if isinstance(region_data, (list, np.ndarray)) else [0, 0, 0]
+                    label = f'Region_{region_id}'
                 
-                # Get region position
-                xyz = region_info.get('xyz', [0, 0, 0])
                 center = np.array(xyz)
                 
                 # Calculate radius based on activity
@@ -159,7 +174,6 @@ class BrainOBJGenerator:
                 )
                 
                 # Write region comment
-                label = region_info.get('label', f'Region_{region_id}')
                 f.write(f"# Region {region_id}: {label}\n")
                 if activity_data is not None:
                     f.write(f"# Activity: {activity_norm:.3f}\n")
@@ -187,6 +201,109 @@ class BrainOBJGenerator:
                 
                 # Update vertex offset for next region
                 vertex_offset += len(vertices)
+    
+    def export_regions_separately(
+        self,
+        output_dir: Path,
+        activity_data: Optional[torch.Tensor] = None,
+        region_positions: Optional[Dict[int, np.ndarray]] = None,
+        min_radius: float = 1.5,
+        max_radius: float = 4.0,
+        prefix: str = "region"
+    ) -> List[Path]:
+        """
+        Export each brain region as a separate OBJ file.
+        This is useful for brain membrane simulation where hundreds of separate
+        objects need individual properties and scripts in Unity.
+        
+        Args:
+            output_dir: Output directory for OBJ files
+            activity_data: Optional activity values for each region [N_regions, ...]
+            region_positions: Optional dict mapping region_id to [x,y,z] position
+            min_radius: Minimum sphere radius
+            max_radius: Maximum sphere radius (for high activity)
+            prefix: Filename prefix for region files
+        
+        Returns:
+            List of paths to exported OBJ files
+        """
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        exported_files = []
+        
+        # Determine regions to process
+        if region_positions:
+            regions_to_process = region_positions.items()
+        else:
+            regions_to_process = [(int(rid), info) for rid, info in self.regions_info.items()]
+        
+        for region_id, region_data in regions_to_process:
+            if isinstance(region_data, dict):
+                # From atlas info
+                region_idx = region_id - 1
+                xyz = region_data.get('xyz', [0, 0, 0])
+                label = region_data.get('label', f'Region_{region_id}')
+            else:
+                # Direct position array
+                region_idx = region_id - 1
+                xyz = region_data if isinstance(region_data, (list, np.ndarray)) else [0, 0, 0]
+                label = f'Region_{region_id}'
+            
+            center = np.array(xyz)
+            
+            # Calculate radius based on activity
+            if activity_data is not None and region_idx < len(activity_data):
+                # Get activity value
+                if len(activity_data.shape) == 1:
+                    activity = activity_data[region_idx].item()
+                else:
+                    activity = activity_data[region_idx].mean().item()
+                
+                # Normalize activity to [0, 1]
+                activity_norm = (activity + 3.0) / 6.0
+                activity_norm = max(0.0, min(1.0, activity_norm))
+                
+                # Map to radius
+                radius = min_radius + (max_radius - min_radius) * activity_norm
+            else:
+                radius = (min_radius + max_radius) / 2
+            
+            # Generate sphere geometry
+            vertices, normals, faces = self.generate_sphere_vertices(
+                center, radius, self.sphere_resolution
+            )
+            
+            # Write individual OBJ file
+            output_path = output_dir / f"{prefix}_{region_id:04d}.obj"
+            with open(output_path, 'w') as f:
+                # Write header
+                f.write("# TwinBrain Brain Region (Individual Export)\n")
+                f.write(f"# Generated: {datetime.now().isoformat()}\n")
+                f.write(f"# Region ID: {region_id}\n")
+                f.write(f"# Label: {label}\n")
+                f.write(f"# Position: {xyz}\n")
+                f.write(f"# Radius: {radius:.2f}\n")
+                if activity_data is not None:
+                    f.write(f"# Activity: {activity_norm:.3f}\n")
+                f.write(f"g region_{region_id}\n\n")
+                
+                # Write vertices
+                for vertex in vertices:
+                    f.write(f"v {vertex[0]:.4f} {vertex[1]:.4f} {vertex[2]:.4f}\n")
+                
+                # Write normals
+                for normal in normals:
+                    f.write(f"vn {normal[0]:.4f} {normal[1]:.4f} {normal[2]:.4f}\n")
+                
+                # Write faces (indices start at 1 for each file)
+                for face in faces:
+                    v1, v2, v3 = face
+                    f.write(f"f {v1+1}//{v1+1} {v2+1}//{v2+1} {v3+1}//{v3+1}\n")
+            
+            exported_files.append(output_path)
+        
+        return exported_files
     
     def export_brain_sequence(
         self,

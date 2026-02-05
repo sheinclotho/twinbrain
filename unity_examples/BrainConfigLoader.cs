@@ -11,6 +11,10 @@ using TwinBrain;
 /// 自动加载并应用unity_config.json配置。
 /// 增强BrainVisualization脚本的自动配置功能。
 /// 
+/// Unity版本兼容性:
+/// - Unity 2017.1+ (C# 6.0支持)
+/// - 对于更早版本的Unity, 请将 ?. 操作符替换为传统null检查
+/// 
 /// 使用方法:
 /// 1. 将此脚本附加到BrainVisualization GameObject
 /// 2. 指向unity_config.json文件
@@ -60,6 +64,8 @@ public class BrainConfigLoader : MonoBehaviour
             // Apply data paths
             if (config["data_paths"] != null)
             {
+                // For Unity pre-2017: JToken jsonDir = config["data_paths"]["json_dir"]; 
+                //                     if (jsonDir != null) { string jsonDirStr = jsonDir.ToString(); ... }
                 string jsonDir = config["data_paths"]["json_dir"]?.ToString();
                 if (!string.IsNullOrEmpty(jsonDir))
                 {

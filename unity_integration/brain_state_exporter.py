@@ -150,8 +150,14 @@ class BrainStateExporter:
         return regions
     
     def _get_region_position(self, region_info: Dict[str, Any]) -> Dict[str, float]:
-        """Get region 3D position."""
-        xyz = region_info.get('xyz', [0, 0, 0])
+        """Get region 3D position, with safe fallback if xyz is missing."""
+        xyz = region_info.get('xyz')
+        
+        # Safe fallback if xyz is missing
+        if xyz is None or not isinstance(xyz, (list, tuple, np.ndarray)) or len(xyz) < 3:
+            # Generate default position to ensure visualization works
+            return {"x": 0.0, "y": 0.0, "z": 0.0}
+        
         return {"x": float(xyz[0]), "y": float(xyz[1]), "z": float(xyz[2])}
     
     def _compute_fmri_activity(

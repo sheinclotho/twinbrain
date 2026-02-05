@@ -11,6 +11,10 @@ using TwinBrain;
 /// 
 /// 连接到TwinBrain WebSocket服务器以获取实时大脑状态更新。
 /// 
+/// Unity版本兼容性:
+/// - Unity 2017.1+ (C# 6.0支持)  
+/// - 对于更早版本的Unity, 请将 ?. 和 ?? 操作符替换为传统null检查
+/// 
 /// 功能:
 /// - 获取当前大脑状态
 /// - 请求预测
@@ -208,9 +212,12 @@ public class WebSocketClient : MonoBehaviour
         try
         {
             JObject data = JObject.Parse(message);
+            // For Unity pre-2017: JToken typeToken = data["type"]; 
+            //                     string type = typeToken != null ? typeToken.ToString() : null;
             string type = data["type"]?.ToString();
             
             // 调用通用消息事件
+            // For Unity pre-2017: if (OnMessageReceived != null) OnMessageReceived(data);
             OnMessageReceived?.Invoke(data);
             
             // 处理特定消息类型
@@ -245,9 +252,12 @@ public class WebSocketClient : MonoBehaviour
                     break;
                 
                 case "error":
+                    // For Unity pre-2017: JToken errorToken = data["message"]; 
+                    //                     string error = errorToken != null ? errorToken.ToString() : "Unknown error";
                     string error = data["message"]?.ToString();
                     Debug.LogError($"服务器错误: {error}");
                     lastError = error;
+                    // For Unity pre-2017: if (OnError != null) OnError(error);
                     OnError?.Invoke(error);
                     break;
                 
