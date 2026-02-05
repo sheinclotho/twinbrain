@@ -136,7 +136,7 @@ class UnityProjectSetup:
                 self.generate_server_scripts()
             
             # 完成
-            self.print_completion_summary()
+            self.print_completion_summary(atlas_info)
             
         except Exception as e:
             print_error(f"设置过程中出错: {e}")
@@ -335,7 +335,7 @@ python -m unity_integration.brain_state_exporter \\
                     if len(parts) >= 5:
                         region_id = parts[0]
                         x, y, z = float(parts[1]), float(parts[2]), float(parts[3])
-                        region_name = parts[4] if len(parts) > 4 else f"Region_{region_id}"
+                        region_name = parts[4]
                         network = parts[5] if len(parts) > 5 else "Unknown"
                         
                         atlas_info['regions'][region_id] = {
@@ -415,9 +415,15 @@ python -m unity_integration.brain_state_exporter \\
                 centroid = region_data['xyz']
                 
                 # 生成并保存OBJ
+                try:
+                    region_id_int = int(region_id)
+                except (ValueError, TypeError):
+                    self.logger.warning(f"跳过无效的region_id: {region_id}")
+                    continue
+                    
                 obj_file = self.obj_dir / f"region_{region_id}_{region_label}.obj"
                 obj_gen.export_region_obj(
-                    region_id=int(region_id),
+                    region_id=region_id_int,
                     output_path=obj_file
                 )
             
@@ -477,6 +483,7 @@ python -m unity_integration.brain_state_exporter \\
         
         has_freesurfer = self.freesurfer_dir and self.freesurfer_dir.exists()
         n_regions = atlas_info.get('n_regions', 200)
+        atlas_name = atlas_info.get('name', self.atlas_name)
         
         readme_content = f"""# TwinBrain Unity 项目 - 使用说明
 
@@ -677,7 +684,7 @@ if __name__ == "__main__":
         server_file.chmod(0o755)
         print_success(f"生成服务器脚本: {server_file.name}")
     
-    def print_completion_summary(self):
+    def print_completion_summary(self, atlas_info: Dict[str, Any]):
         """打印完成摘要"""
         print_header("✅ 设置完成！")
         
@@ -694,10 +701,12 @@ if __name__ == "__main__":
         print()
         
         if not (self.freesurfer_dir and self.freesurfer_dir.exists()):
+            # 从atlas_info获取实际脑区数量
+            n_regions = atlas_info.get('n_regions', 200) if hasattr(self, 'atlas_info') and self.atlas_info else 200
             print(f"{Colors.BOLD}⚠️ 下一步（重要）：{Colors.END}")
             print(f"  1. 将FreeSurfer文件放入: {Colors.GREEN}{self.freesurfer_folder}{Colors.END}")
             print(f"  2. 运行: {Colors.GREEN}python setup_unity_project.py --freesurfer-dir {self.freesurfer_folder}{Colors.END}")
-            print(f"  3. 这将生成真实的200个脑区OBJ模型")
+            print(f"  3. 这将生成真实的{n_regions}个脑区OBJ模型")
             print()
         
         print(f"{Colors.BOLD}数据处理流程：{Colors.END}")
