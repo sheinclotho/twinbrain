@@ -42,6 +42,10 @@ class WorkflowConfig:
     output_dir: str = "output/unity_export"
     export_formats: List[str] = None  # ['json', 'obj', 'fbx']
     
+    # OBJ export options
+    export_obj_per_frame: bool = False  # Export separate OBJ per time frame
+    export_obj_per_region: bool = False  # Export separate OBJ per region (for brain membrane simulation)
+    
     # 时间范围
     start_time: int = 0
     end_time: Optional[int] = None
@@ -50,7 +54,6 @@ class WorkflowConfig:
     # 导出选项
     export_connectivity: bool = True
     export_networks: bool = True
-    export_obj_per_frame: bool = False  # 每帧导出独立OBJ
     export_surface_mesh: bool = False   # Export FreeSurfer surface mesh (if available)
     
     # Unity配置
@@ -249,7 +252,24 @@ class WorkflowManager:
         n_regions, n_timepoints, _ = fmri_data.shape
         end_time = self.config.end_time or n_timepoints
         
-        if self.config.export_obj_per_frame:
+        if self.config.export_obj_per_region:
+            # 新模式: 每个脑区导出独立OBJ（用于脑膜模拟）
+            self.logger.info(f"  导出独立脑区OBJ模型（脑膜模拟模式）...")
+            self.logger.info(f"    将生成 {n_regions} 个独立OBJ文件")
+            
+            # Use mean activity across time for each region
+            mean_activity = fmri_data.mean(dim=1)  # [n_regions, features]
+            
+            exported_paths = self.obj_generator.export_regions_separately(
+                output_dir=obj_dir,
+                activity_data=mean_activity,
+                prefix="brain_region"
+            )
+            
+            obj_files.extend([str(f.relative_to(self.output_dir)) for f in exported_paths])
+            self.logger.info(f"  ✓ 生成了 {len(exported_paths)} 个独立脑区OBJ文件")
+            
+        elif self.config.export_obj_per_frame:
             # 每帧导出独立OBJ
             self.logger.info(f"  导出时间序列OBJ模型...")
             self.obj_generator.export_brain_sequence(

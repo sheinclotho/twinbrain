@@ -185,21 +185,29 @@ Unity项目资源文件：
                     logger.info(f"  ✓ 复制: {src} -> {dst.name}")
         
         # 检查FreeSurfer文件是否存在
-        required_files = [
-            self.freesurfer_dir / "lh.pial",
-            self.freesurfer_dir / "rh.pial",
-            self.freesurfer_dir / "lh.Schaefer2018_200Parcels_7Networks_order.annot",
-            self.freesurfer_dir / "rh.Schaefer2018_200Parcels_7Networks_order.annot"
-        ]
+        required_files = {
+            'lh_surface': self.freesurfer_dir / "lh.pial",
+            'rh_surface': self.freesurfer_dir / "rh.pial",
+            'lh_annot': self.freesurfer_dir / "lh.Schaefer2018_200Parcels_7Networks_order.annot",
+            'rh_annot': self.freesurfer_dir / "rh.Schaefer2018_200Parcels_7Networks_order.annot"
+        }
         
-        all_exist = all(f.exists() for f in required_files)
+        missing_files = [name for name, path in required_files.items() if not path.exists()]
         
-        if all_exist:
+        if not missing_files:
             logger.info("  ✓ 所有FreeSurfer文件已就位")
+            logger.info(f"    - lh.pial: {required_files['lh_surface']}")
+            logger.info(f"    - rh.pial: {required_files['rh_surface']}")
+            logger.info(f"    - lh.annot: {required_files['lh_annot']}")
+            logger.info(f"    - rh.annot: {required_files['rh_annot']}")
             self._generate_unity_structure_from_freesurfer()
         else:
             logger.warning("  ⚠ FreeSurfer文件缺失，将使用默认配置")
-            logger.info("  提示: 将FreeSurfer文件放入 freesurfer_files/ 文件夹后重新运行")
+            logger.info(f"  缺失文件: {', '.join(missing_files)}")
+            logger.info("  提示: 将FreeSurfer文件放入以下位置:")
+            for name, path in required_files.items():
+                status = "✓" if path.exists() else "✗"
+                logger.info(f"    {status} {path}")
             self._generate_default_unity_structure()
     
     def _generate_unity_structure_from_freesurfer(self):

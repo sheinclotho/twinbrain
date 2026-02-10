@@ -11,8 +11,14 @@ using TwinBrain;
 /// 此脚本从TwinBrain加载并可视化大脑状态JSON文件。
 /// 将此脚本附加到Unity场景中的GameObject上。
 /// 
+/// Unity版本兼容性:
+/// - Unity 2017.1+ (C# 6.0支持)
+/// - 对于更早版本的Unity (2017之前), 请将 ?.  和 ?? 操作符替换为传统null检查
+/// 
 /// 依赖项:
-/// - Newtonsoft.Json（通过Package Manager安装）
+/// - Newtonsoft.Json（通过Package Manager安装或导入DLL）
+///   Unity 2018.1+: 通过Package Manager安装
+///   Unity 2017.x: 从NuGet下载DLL并放入Plugins文件夹
 /// - 带有Renderer组件的脑区预制体
 /// - 连接线预制体
 /// - BrainDataStructures.cs（数据结构定义）
@@ -195,6 +201,8 @@ public class BrainVisualization : MonoBehaviour
     void CreateRegion(RegionData region)
     {
         // Check activity threshold
+        // Note: For Unity pre-2017, replace ?.  with: 
+        // float activity = (region.activity.fmri != null) ? region.activity.fmri.amplitude : 0f;
         float activity = region.activity.fmri?.amplitude ?? 0f;
         if (activity < activityThreshold) return;
         
@@ -252,6 +260,8 @@ public class BrainVisualization : MonoBehaviour
         lineObj.transform.SetParent(transform);
         
         LineRenderer line = lineObj.AddComponent<LineRenderer>();
+        // For Unity pre-2017, replace ?? with: 
+        // line.material = connectionMaterial != null ? connectionMaterial : new Material(Shader.Find("Sprites/Default"));
         line.material = connectionMaterial ?? new Material(Shader.Find("Sprites/Default"));
         
         // Set positions
