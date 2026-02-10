@@ -409,25 +409,14 @@ python -m unity_integration.brain_state_exporter \\
                 sphere_resolution=16  # 16x16网格
             )
             
-            # 为每个脑区生成OBJ文件
-            for region_id, region_data in atlas_info['regions'].items():
-                region_label = region_data['label']
-                centroid = region_data['xyz']
-                
-                # 生成并保存OBJ
-                try:
-                    region_id_int = int(region_id)
-                except (ValueError, TypeError):
-                    self.logger.warning(f"跳过无效的region_id: {region_id}")
-                    continue
-                    
-                obj_file = self.obj_dir / f"region_{region_id}_{region_label}.obj"
-                obj_gen.export_region_obj(
-                    region_id=region_id_int,
-                    output_path=obj_file
-                )
+            # 为每个脑区生成独立OBJ文件（用于脑膜模拟）
+            exported_paths = obj_gen.export_regions_separately(
+                output_dir=self.obj_dir,
+                activity_data=None,  # 没有活动数据时使用默认半径
+                prefix="region"
+            )
             
-            print_success(f"生成了{atlas_info['n_regions']}个OBJ模型到: {self.obj_dir}")
+            print_success(f"生成了{len(exported_paths)}个OBJ模型到: {self.obj_dir}")
             
         except ImportError as e:
             print_error(f"无法导入FreeSurfer加载器: {e}")
