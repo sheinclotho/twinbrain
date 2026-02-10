@@ -27,15 +27,14 @@ pip install -r requirements.txt
 ### 一键生成Unity项目
 
 ```bash
-# 自动生成完整Unity项目结构
-python setup_unity_workflow.py --auto-setup
-```
+# 基本使用：创建项目结构
+python setup_unity_project.py
 
-### 使用FreeSurfer数据（可选）
+# 使用FreeSurfer数据自动生成OBJ模型
+python setup_unity_project.py --freesurfer-dir /path/to/freesurfer/files
 
-```bash
-# 将FreeSurfer文件放入指定位置后
-python setup_unity_workflow.py --auto-setup
+# 指定atlas（必须与freesurfer文件匹配）
+python setup_unity_project.py --freesurfer-dir /path/to/fs --atlas Schaefer200
 ```
 
 ## 📖 详细说明
@@ -64,19 +63,20 @@ python setup_unity_workflow.py --auto-setup
 
 ```
 twinbrain/
-├── unity_integration/     # Unity集成模块
-│   ├── obj_generator.py   # OBJ 3D模型生成（支持批量导出）
-│   ├── freesurfer_loader.py  # FreeSurfer数据加载
-│   ├── brain_state_exporter.py  # JSON数据导出
-│   └── workflow_manager.py  # 工作流管理
-├── unity_examples/        # Unity C#示例脚本
+├── unity_integration/          # Unity集成模块
+│   ├── obj_generator.py        # OBJ 3D模型生成（支持独立导出多个脑区）
+│   ├── freesurfer_loader.py    # FreeSurfer数据加载
+│   ├── brain_state_exporter.py # JSON数据导出
+│   └── workflow_manager.py     # 工作流管理
+├── unity_examples/             # Unity C#示例脚本
 │   ├── BrainVisualization.cs
 │   ├── BrainConfigLoader.cs
 │   ├── BrainDataStructures.cs
 │   └── WebSocketClient.cs
-├── mapper/                # 脑图谱和数据映射
-├── workflows/             # 训练和预处理工作流
-└── setup_unity_workflow.py  # 一键式Unity项目设置
+├── mapper/                     # 脑图谱和数据映射
+├── workflows/                  # 训练和预处理工作流
+├── setup_unity_project.py      # 一键式Unity项目设置（推荐使用）
+└── example_*.py                # 各种功能示例脚本
 ```
 
 ## 🎯 使用场景
