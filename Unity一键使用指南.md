@@ -25,17 +25,15 @@ git clone https://github.com/sheinclotho/twinbrain.git
 cd twinbrain
 
 # 如果有FreeSurfer文件，生成真实OBJ模型
-python setup_unity_project.py \
-    --freesurfer-dir /path/to/freesurfer/files \
-    --atlas Schaefer200
+python setup_unity_project.py --freesurfer-dir /path/to/freesurfer/files
 ```
 
 如果没有FreeSurfer文件：
 ```bash
 # 创建基本项目结构
-python setup_unity_project.py
+python setup_unity_project.py --auto-setup
 
-# 然后将FreeSurfer文件放入生成的freesurfer/文件夹
+# 然后将FreeSurfer文件放入生成的freesurfer_files/文件夹
 # 再次运行生成OBJ模型
 ```
 
@@ -57,8 +55,7 @@ cp preprocessed_data.pkl Unity_TwinBrain/data/cache/
 # 处理数据生成JSON状态文件
 python -m unity_integration.brain_state_exporter \
     --data-dir Unity_TwinBrain/data \
-    --output Unity_TwinBrain/state \
-    --atlas Schaefer200
+    --output Unity_TwinBrain/state
 ```
 
 ### 阶段3: Unity设置
@@ -198,12 +195,14 @@ A:
 3. 使用Unity的LOD系统
 
 ### Q: 如何使用不同的atlas？
-A: 
+A: FreeSurfer标注文件的名称已经指定了atlas类型（如Schaefer2018_200Parcels），系统会自动识别。只需确保标注文件名称正确即可。
 ```bash
-# 生成时指定atlas
-python setup_unity_project.py \
-    --freesurfer-dir /path/to/fs \
-    --atlas Schaefer100  # 或Schaefer400
+# 示例：使用不同数量的脑区
+# 将对应的标注文件放入freesurfer_files/文件夹
+# - lh.Schaefer2018_100Parcels_7Networks_order.annot (100个脑区)
+# - lh.Schaefer2018_200Parcels_7Networks_order.annot (200个脑区)
+# - lh.Schaefer2018_400Parcels_7Networks_order.annot (400个脑区)
+python setup_unity_project.py --freesurfer-dir /path/to/fs
 ```
 
 ### Q: 数据在哪里处理？
@@ -249,9 +248,7 @@ for subject in subjects:
 
 ```bash
 # 1. 生成项目（使用FreeSurfer）
-python setup_unity_project.py \
-    --freesurfer-dir my_freesurfer_data \
-    --atlas Schaefer200
+python setup_unity_project.py --freesurfer-dir my_freesurfer_data
 
 # 2. 处理数据
 python -m unity_integration.brain_state_exporter \

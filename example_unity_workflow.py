@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from unity_integration import run_unity_workflow, WorkflowConfig
 
 # 常量
-SEPARATOR = SEPARATOR
+SEPARATOR = "=" * 80
 
 
 def example_basic_workflow():
