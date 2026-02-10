@@ -28,13 +28,10 @@ pip install -r requirements.txt
 
 ```bash
 # 基本使用：创建项目结构
-python setup_unity_project.py
+python setup_unity_project.py --auto-setup
 
 # 使用FreeSurfer数据自动生成OBJ模型
 python setup_unity_project.py --freesurfer-dir /path/to/freesurfer/files
-
-# 指定atlas（必须与freesurfer文件匹配）
-python setup_unity_project.py --freesurfer-dir /path/to/fs --atlas Schaefer200
 ```
 
 ## 📖 详细说明

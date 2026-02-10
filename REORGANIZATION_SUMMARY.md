@@ -1,7 +1,26 @@
 # TwinBrain 仓库重新整理完成总结
 
 **日期**: 2024-02-10  
-**作者**: GitHub Copilot (AI Assistant)
+**作者**: GitHub Copilot (AI Assistant)  
+**更正**: 2024-02-10 v2 - 恢复正确的workflow脚本
+
+---
+
+## ⚠️ 重要更正
+
+**最初的错误判断：**
+我最初错误地认为 `setup_unity_project.py` 是最新版本，删除了 `setup_unity_workflow.py`。
+
+**实际情况：**
+- `setup_unity_workflow.py` 才是真正的最新版本
+- 该版本使用 `WorkflowConfig` 和 `run_unity_workflow`，不依赖atlas文件
+- 该版本避免了atlas文件中假设的xyz数据可能导致的bug
+
+**已采取的纠正措施：**
+1. ✅ 恢复 `setup_unity_workflow.py` 
+2. ✅ 将其重命名为 `setup_unity_project.py`（保持文档一致性）
+3. ✅ 移除所有atlas依赖说明
+4. ✅ 更新文档移除"必须指定atlas"的要求
 
 ---
 
