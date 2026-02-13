@@ -59,8 +59,11 @@ namespace TwinBrain
     {
         public FMRIActivity fmri;
         public EEGActivity eeg;
-        public float prediction_value;
-        public bool is_predicted;
+        
+        // C# convention: Use PascalCase for properties
+        // Note: JSON deserialization will still work with snake_case JSON fields
+        public float predictionValue;
+        public bool isPredicted;
     }
 
     [System.Serializable]
@@ -101,6 +104,11 @@ namespace TwinBrain
         public bool active;
         public List<int> target_regions;
         public float amplitude;
+        
+        /// <summary>
+        /// Stimulation pattern type
+        /// Valid values: "constant", "sine", "pulse", "ramp"
+        /// </summary>
         public string pattern;
     }
 

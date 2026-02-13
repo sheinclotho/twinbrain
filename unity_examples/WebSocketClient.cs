@@ -153,7 +153,7 @@ namespace TwinBrain
         /// <summary>
         /// 向服务器发送请求
         /// </summary>
-        public void SendRequest(string requestType, JObject parameters)
+        public void SendRequest(string requestType, JObject parameters = null)
         {
             if (!isConnected)
             {
@@ -200,7 +200,7 @@ namespace TwinBrain
         /// <summary>
         /// 请求未来预测
         /// </summary>
-        public void RequestPrediction(int nSteps)
+        public void RequestPrediction(int nSteps = 10)
         {
             JObject parameters = new JObject();
             parameters["n_steps"] = nSteps;
@@ -210,7 +210,7 @@ namespace TwinBrain
         /// <summary>
         /// 请求刺激模拟
         /// </summary>
-        public void SimulateStimulation(int[] targetRegions, float amplitude, string pattern)
+        public void SimulateStimulation(int[] targetRegions, float amplitude, string pattern = "sine")
         {
             JObject stimulation = new JObject();
             stimulation["target_regions"] = new JArray(targetRegions);
@@ -226,7 +226,7 @@ namespace TwinBrain
         /// <summary>
         /// 开始流式传输大脑活动
         /// </summary>
-        public void StartStream(int fps, int duration)
+        public void StartStream(int fps = 10, int duration = 60)
         {
             JObject parameters = new JObject();
             parameters["fps"] = fps;

@@ -20,6 +20,11 @@ namespace TwinBrain
     /// - 点击交互选择脑区
     /// - 虚拟刺激输入
     /// 
+    /// OBJ模型加载说明:
+    /// - 运行时OBJ加载需要第三方插件（如TriLib, Runtime OBJ Importer）
+    /// - 或在Unity Editor中预先导入OBJ文件作为资产
+    /// - OBJ文件命名格式: region_XXXX.obj（XXXX为零填充的区域ID）
+    /// 
     /// 依赖项:
     /// - Newtonsoft.Json (通过Package Manager安装)
     /// - BrainDataStructures.cs
@@ -396,9 +401,9 @@ namespace TwinBrain
         {
             if (region.activity == null) return 0f;
             
-            if (region.activity.is_predicted && region.activity.prediction_value > 0)
+            if (region.activity.isPredicted && region.activity.predictionValue > 0)
             {
-                return region.activity.prediction_value;
+                return region.activity.predictionValue;
             }
             
             if (region.activity.fmri != null)
@@ -421,7 +426,7 @@ namespace TwinBrain
         {
             float activity = GetRegionActivity(region);
             
-            if (region.activity != null && region.activity.is_predicted)
+            if (region.activity != null && region.activity.isPredicted)
             {
                 return Color.Lerp(lowActivityColor, predictedColor, activity);
             }
