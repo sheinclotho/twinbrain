@@ -199,7 +199,8 @@ def run_comprehensive_diagnostics(
                     elif hasattr(dec, f"log_scale_{nt}"):
                         log_scale = getattr(dec, f"log_scale_{nt}")
                         modality_result["metrics"]["scale"] = float(torch.exp(log_scale).mean().cpu())
-                except:
+                except (AttributeError, RuntimeError):
+                    # Scale extraction failed - not critical for diagnostics
                     pass
             
             # === Generate plots ===

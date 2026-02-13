@@ -16,6 +16,9 @@ from torch_geometric.data import HeteroData
 
 from preprocess.eeg_preprocessor import EEGPreprocessor
 
+# Configure logger for EEGMapper
+logger = logging.getLogger(__name__)
+
 
 class EEGMapper:
     """
@@ -93,7 +96,7 @@ class EEGMapper:
             for t, files in task_files.items():
                 on_file, off_file = files.get("ON"), files.get("OFF")
                 if not (on_file and off_file):
-                    print(f"[EEGMapper] Skipping incomplete task {t}")
+                    logger.warning(f"Skipping incomplete task {t}")
                     continue
                 if merge:
                     raw_on = self.preprocessor.preprocess(str(on_file))
@@ -108,14 +111,14 @@ class EEGMapper:
                     mapper.epochs = self.preprocessor.extract_epochs(mapper.raw, epoch_length=self.epoch_length)
                     mapper.node_mask = np.ones(len(mapper.channel_names), dtype=np.float32)
                     data[t] = mapper
-                    print(f"[EEG] Loaded task {t}: merged {on_file.name} + {off_file.name}")
+                    logger.info(f"Loaded task {t}: merged {on_file.name} + {off_file.name}")
                 else:
                     mapper_on = EEGMapper(preprocessor=self.preprocessor, epoch_length=self.epoch_length, stc_cache_dir=self.stc_cache_dir, debug=self.debug)
                     mapper_off = EEGMapper(preprocessor=self.preprocessor, epoch_length=self.epoch_length, stc_cache_dir=self.stc_cache_dir, debug=self.debug)
                     mapper_on.load_file(str(on_file))
                     mapper_off.load_file(str(off_file))
                     data[t] = {"on": mapper_on, "off": mapper_off}
-                    print(f"[EEG] Loaded task {t}: ON={on_file.name}, OFF={off_file.name}")
+                    logger.info(f"Loaded task {t}: ON={on_file.name}, OFF={off_file.name}")
             return data
         on_file, off_file = task_files
         if merge:
@@ -161,7 +164,7 @@ class EEGMapper:
         try:
             self.raw.set_montage('standard_1005', on_missing='warn')
         except Exception as e:
-            print(f"[WARN] montage 设置失败: {e}")
+            logger.warning(f"Montage setup failed: {e}")
         eeg_picks = mne.pick_types(self.raw.info, eeg=True, exclude=[])
         if len(eeg_picks) == 0:
             raise RuntimeError("No EEG channels.")
@@ -196,7 +199,7 @@ class EEGMapper:
         try:
             stc.save(str(cache_file), overwrite=True)
         except Exception as e:
-            print(f"[WARN] 缓存保存失败: {e}")
+            logger.warning(f"Cache save failed: {e}")
         self.stc = stc
         return stc
 
@@ -247,8 +250,8 @@ class EEGMapper:
         ts = (ts - ts.mean(axis=1, keepdims=True)) / (ts.std(axis=1, keepdims=True) + 1e-8)
 
         if self.debug:
-            print(f"[DEBUG] Feature source ts shape={ts.shape} (ch, time), epochs={n_epochs}, epoch_len={n_times_epoch}")
-            print(f"[DEBUG] max_time_chunk={max_time_chunk}")
+            logger.debug(f"Feature source ts shape={ts.shape} (ch, time), epochs={n_epochs}, epoch_len={n_times_epoch}")
+            logger.debug(f"max_time_chunk={max_time_chunk}")
 
         # === 2) 分块处理时间轴 ===
         feat_chunks = []
@@ -258,7 +261,7 @@ class EEGMapper:
             end = min(start + max_time_chunk, total_times)
             sub_ts = ts[:, start:end]  # (ch, chunk_time)
             if self.debug:
-                print(f"[DEBUG] Processing time chunk {start}:{end} -> shape {sub_ts.shape}")
+                logger.debug(f"Processing time chunk {start}:{end} -> shape {sub_ts.shape}")
 
             sub_feats = self._extract_feats_for_chunk(sub_ts,
                                                       with_stats=with_stats,
@@ -272,10 +275,10 @@ class EEGMapper:
         all_feats = np.concatenate(feat_chunks, axis=1) if feat_chunks else np.zeros((n_channels, 0, 0), dtype=np.float32)
 
         if self.debug:
-            print(f"[DEBUG] Feature shape={all_feats.shape} (ch, time, feat_dim)")
+            logger.debug(f"Feature shape={all_feats.shape} (ch, time, feat_dim)")
             if all_feats.size:
-                print(f"[DEBUG] Feature dim per node={all_feats.shape[-1]}")
-                print(f"[DEBUG] Mean amplitude per ch (first 5): {ts.mean(axis=1)[:5]}")
+                logger.debug(f"Feature dim per node={all_feats.shape[-1]}")
+                logger.debug(f"Mean amplitude per ch (first 5): {ts.mean(axis=1)[:5]}")
 
         return all_feats.astype(np.float32)
 
@@ -325,7 +328,7 @@ class EEGMapper:
                 gamma = psd[(freqs >= 30) & (freqs < 45)].mean() if psd.size else 0.0
             except Exception as e:
                 if self.debug:
-                    print(f"[WARN] PSD failed for channel {i} in chunk: {e}")
+                    logger.warning(f"PSD failed for channel {i} in chunk: {e}")
                 delta = theta = alpha = beta = gamma = 0.0
             psd_list.append([delta, theta, alpha, beta, gamma])
 
@@ -366,7 +369,7 @@ class EEGMapper:
             raise ValueError(f"Unsupported FC method: {method}")
         self.fc_matrix = fc.astype(np.float32)
         if self.debug:
-            print(f"[DEBUG] FC matrix computed, shape={self.fc_matrix.shape}")
+            logger.debug(f"FC matrix computed, shape={self.fc_matrix.shape}")
         return self.fc_matrix
 
     # -------------------------

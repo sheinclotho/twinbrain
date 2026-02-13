@@ -25,13 +25,13 @@ TwinBrain Unity 后端服务器启动脚本
 
 使用方法:
     # 启动后端服务器（带模型）
-    python unity_startup.py --model path/to/model.pth
+    python unity_startup.py --model path/to/model.pt
     
     # 演示模式（无模型）
     python unity_startup.py --demo
     
     # 指定输出目录
-    python unity_startup.py --model model.pth --output Unity_TwinBrain/state
+    python unity_startup.py --model model.pt --output Unity_TwinBrain/state
 """
 
 import argparse
@@ -200,7 +200,7 @@ def main():
         epilog="""
 示例:
   # 使用训练好的模型启动
-  python unity_startup.py --model results/best_model.pth
+  python unity_startup.py --model results/hetero_gnn_trained.pt
   
   # 指定输出目录和端口
   python unity_startup.py --output Unity_TwinBrain --port 8080
@@ -272,12 +272,18 @@ def main():
             sys.exit(1)
     elif not args.demo:
         logger.warning("⚠ 未指定模型文件，将尝试使用默认模型")
-        default_model = project_root / "results" / "best_model.pth"
+        # Try trained model first (from training workflow)
+        default_model = project_root / "test_file3" / "sub-01" / "results" / "hetero_gnn_trained.pt"
+        if not default_model.exists():
+            # Fallback to results directory
+            default_model = project_root / "results" / "hetero_gnn_trained.pt"
+        
         if default_model.exists():
             model_path = default_model
             logger.info(f"✓ 使用默认模型: {model_path}")
         else:
             logger.warning("⚠ 默认模型不存在，使用演示模式")
+            logger.info("提示: 训练后的模型通常在 test_file3/sub-XX/results/hetero_gnn_trained.pt")
     
     # 启动服务器
     try:

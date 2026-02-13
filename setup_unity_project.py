@@ -22,7 +22,7 @@ TwinBrain Unity 项目设置脚本
     python setup_unity_project.py --auto-setup
     
     # 然后在使用时启动后端服务器（见 unity_startup.py）
-    python unity_startup.py --model results/model.pth
+    python unity_startup.py --model results/hetero_gnn_trained.pt
 """
 
 import argparse

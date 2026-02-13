@@ -57,7 +57,7 @@ class ModelServer:
         加载训练好的模型
         
         Args:
-            model_path: 模型文件路径
+            model_path: 模型文件路径 (应为 .pt 格式的PyTorch checkpoint)
         
         Returns:
             是否加载成功
@@ -66,12 +66,26 @@ class ModelServer:
             model_path = Path(model_path)
             if not model_path.exists():
                 self.logger.error(f"模型文件不存在: {model_path}")
+                self.logger.info("提示: 训练后的模型通常在 test_file3/sub-XX/results/hetero_gnn_trained.pt")
                 return False
+            
+            # Validate file extension
+            if model_path.suffix not in ['.pt', '.pth']:
+                self.logger.warning(f"模型文件扩展名不常见: {model_path.suffix}")
+                self.logger.info("提示: TwinBrain模型通常为 .pt 格式")
             
             self.logger.info(f"加载模型: {model_path}")
             
-            # 加载checkpoint
-            checkpoint = torch.load(model_path, map_location=self.device)
+            # 加载checkpoint with validation
+            try:
+                checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
+            except Exception as load_err:
+                self.logger.error(f"文件读取失败: {load_err}")
+                self.logger.info("可能原因:")
+                self.logger.info("  1. 文件已损坏")
+                self.logger.info("  2. PyTorch版本不兼容")
+                self.logger.info("  3. 文件格式错误 (期望 .pt 格式)")
+                return False
             
             # 提取模型和配置
             if isinstance(checkpoint, dict):
@@ -81,7 +95,9 @@ class ModelServer:
                 elif 'model' in checkpoint:
                     self.model = checkpoint['model']
                 else:
+                    # Assume entire dict is the model state
                     self.model = checkpoint
+                    self.logger.warning("Checkpoint格式非标准，使用整个字典作为模型")
                 
                 # 提取配置信息
                 if 'config' in checkpoint:
@@ -94,6 +110,7 @@ class ModelServer:
                     self.logger.info(f"  - 最佳损失: {checkpoint['best_loss']:.4f}")
             else:
                 self.model = checkpoint
+                self.logger.warning("模型不包含元数据字典")
             
             self.logger.info("✓ 模型加载成功")
             return True

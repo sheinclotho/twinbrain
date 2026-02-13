@@ -361,13 +361,54 @@ class WorkflowManager:
         return material_files
     
     def _load_local_data(self) -> tuple:
-        """从本地文件加载数据"""
+        """
+        从本地文件或缓存加载数据
+        
+        支持的数据源：
+        1. 训练生成的缓存文件 (cache/eeg_data.pt, cache/hetero_graphs.pt)
+        2. 单个 .pt 模型或数据文件
+        3. JSON 格式的脑状态文件
+        
+        Returns:
+            tuple: (brain_data, connectivity)
+        """
         if not self.config.data_path:
             raise ValueError("本地数据源需要指定 data_path")
         
-        # 这里应该实现实际的数据加载逻辑
-        # 暂时返回示例数据
-        self.logger.warning("使用示例数据（本地加载未完全实现）")
+        data_path = Path(self.config.data_path)
+        
+        # 优先级1: 检查缓存文件 (训练生成的标准格式)
+        cache_dir = data_path / "cache"
+        eeg_cache = cache_dir / "eeg_data.pt"
+        hetero_cache = cache_dir / "hetero_graphs.pt"
+        
+        if eeg_cache.exists() and hetero_cache.exists():
+            self.logger.info(f"找到缓存文件: {cache_dir}")
+            return self._unpack_hetero_cache(eeg_cache, hetero_cache)
+        
+        # 优先级2: 搜索 results/cache 目录
+        results_cache = data_path / "results" / "cache"
+        if results_cache.exists():
+            eeg_cache = results_cache / "eeg_data.pt"
+            hetero_cache = results_cache / "hetero_graphs.pt"
+            if eeg_cache.exists() and hetero_cache.exists():
+                self.logger.info(f"找到缓存文件: {results_cache}")
+                return self._unpack_hetero_cache(eeg_cache, hetero_cache)
+        
+        # 优先级3: 查找任何 .pt 文件
+        pt_files = list(data_path.glob("**/*.pt"))
+        if pt_files:
+            self.logger.info(f"找到 {len(pt_files)} 个 .pt 文件，尝试加载第一个: {pt_files[0]}")
+            return self._load_single_pt_file(pt_files[0])
+        
+        # 优先级4: 查找 JSON 文件
+        json_files = list(data_path.glob("**/*.json"))
+        if json_files:
+            self.logger.info(f"找到 {len(json_files)} 个 JSON 文件，尝试加载")
+            return self._load_json_data(json_files[0])
+        
+        # 没有找到可用数据，返回示例数据
+        self.logger.warning(f"在 {data_path} 未找到可用数据文件，使用示例数据")
         return self._generate_example_data()
     
     def _download_and_process_data(self) -> tuple:
@@ -385,6 +426,216 @@ class WorkflowManager:
         # 这里应该实现使用模型生成预测的逻辑
         self.logger.warning("模型生成功能未完全实现，使用示例数据")
         return self._generate_example_data()
+    
+    def _has_node_type(self, graph, node_type: str) -> bool:
+        """
+        检查图是否包含指定节点类型
+        
+        Args:
+            graph: HeteroData图对象
+            node_type: 节点类型名称 (如 'fmri', 'eeg')
+        
+        Returns:
+            bool: 是否包含该节点类型
+        """
+        return hasattr(graph, '__getitem__') and hasattr(graph, 'node_types') and node_type in graph.node_types
+    
+    def _get_preferred_eeg_state(self, states: dict):
+        """
+        获取首选的EEG状态数据
+        
+        优先使用 'on' 状态，因为通常包含任务激活的脑活动。
+        如果 'on' 不存在，使用第一个可用状态。
+        
+        Args:
+            states: EEG状态字典 {'on': HeteroData, 'off': HeteroData}
+        
+        Returns:
+            HeteroData or None
+        """
+        # 优先使用 'on' 状态（任务激活状态）
+        if 'on' in states:
+            return states['on']
+        # 回退到任何可用状态
+        return next(iter(states.values()), None) if states else None
+    
+    def _unpack_hetero_cache(self, eeg_cache_path: Path, hetero_cache_path: Path) -> tuple:
+        """
+        解包训练生成的异构图缓存文件
+        
+        缓存文件格式 (来自 workflows/training.py):
+        - eeg_data.pt: Dict[task, Dict[state, HeteroData]]
+        - hetero_graphs.pt: Dict[task, List[HeteroData]] or List[HeteroData]
+        
+        Args:
+            eeg_cache_path: EEG数据缓存文件路径
+            hetero_cache_path: 异构图缓存文件路径
+        
+        Returns:
+            tuple: (brain_data, connectivity)
+        """
+        self.logger.info(f"加载EEG缓存: {eeg_cache_path.name}")
+        self.logger.info(f"加载异构图缓存: {hetero_cache_path.name}")
+        
+        try:
+            # 加载缓存文件
+            eeg_data = torch.load(eeg_cache_path, map_location="cpu", weights_only=False)
+            hetero_graphs = torch.load(hetero_cache_path, map_location="cpu", weights_only=False)
+            
+            brain_data = {}
+            
+            # 从 hetero_graphs 提取 fMRI 活动数据
+            fmri_extracted = False
+            if isinstance(hetero_graphs, dict):
+                # 格式: Dict[task, List[HeteroData]]
+                for task_name, graph_list in hetero_graphs.items():
+                    if isinstance(graph_list, list) and len(graph_list) > 0:
+                        graph = graph_list[0]  # 使用第一个图
+                        if self._has_node_type(graph, 'fmri'):
+                            if hasattr(graph['fmri'], 'x_seq'):
+                                brain_data['fmri'] = graph['fmri'].x_seq
+                                self.logger.info(f"从任务 '{task_name}' 提取fMRI数据: shape={graph['fmri'].x_seq.shape}")
+                                fmri_extracted = True
+                                break
+            elif isinstance(hetero_graphs, list) and len(hetero_graphs) > 0:
+                # 格式: List[HeteroData]
+                graph = hetero_graphs[0]
+                if self._has_node_type(graph, 'fmri'):
+                    if hasattr(graph['fmri'], 'x_seq'):
+                        brain_data['fmri'] = graph['fmri'].x_seq
+                        self.logger.info(f"提取fMRI数据: shape={graph['fmri'].x_seq.shape}")
+                        fmri_extracted = True
+            
+            if not fmri_extracted:
+                self.logger.warning("未能从hetero_graphs提取fMRI数据")
+            
+            # 从 eeg_data 提取 EEG 活动数据
+            eeg_extracted = False
+            if isinstance(eeg_data, dict):
+                # 格式: Dict[task, Dict[state, HeteroData]]
+                for task_name, states in eeg_data.items():
+                    if isinstance(states, dict):
+                        state_data = self._get_preferred_eeg_state(states)
+                        if state_data is not None:
+                            if self._has_node_type(state_data, 'eeg'):
+                                if hasattr(state_data['eeg'], 'x_seq'):
+                                    brain_data['eeg'] = state_data['eeg'].x_seq
+                                    self.logger.info(f"从任务 '{task_name}' 提取EEG数据: shape={state_data['eeg'].x_seq.shape}")
+                                    eeg_extracted = True
+                                    break
+            
+            if not eeg_extracted:
+                self.logger.warning("未能从eeg_data提取EEG数据")
+            
+            # 提取连接矩阵
+            connectivity = self._extract_connectivity_from_hetero(hetero_graphs)
+            
+            if not brain_data:
+                self.logger.warning("缓存文件中未能提取任何脑活动数据，使用示例数据")
+                return self._generate_example_data()
+            
+            return brain_data, connectivity
+            
+        except Exception as e:
+            self.logger.error(f"加载缓存文件失败: {e}", exc_info=True)
+            self.logger.warning("使用示例数据替代")
+            return self._generate_example_data()
+    
+    def _extract_connectivity_from_hetero(self, hetero_graphs) -> Dict[str, np.ndarray]:
+        """从异构图提取连接矩阵"""
+        connectivity = {}
+        
+        try:
+            graph = None
+            if isinstance(hetero_graphs, dict):
+                # 获取第一个任务的第一个图
+                for task_name, graph_list in hetero_graphs.items():
+                    if isinstance(graph_list, list) and len(graph_list) > 0:
+                        graph = graph_list[0]
+                        break
+            elif isinstance(hetero_graphs, list) and len(hetero_graphs) > 0:
+                graph = hetero_graphs[0]
+            
+            if graph is None:
+                return connectivity
+            
+            # 提取 fMRI-fMRI 连接 (结构连接)
+            if hasattr(graph, 'edge_types'):
+                for edge_type in graph.edge_types:
+                    src_type, edge_name, dst_type = edge_type
+                    if src_type == 'fmri' and dst_type == 'fmri':
+                        edge_index = graph[edge_type].edge_index
+                        n_regions = graph['fmri'].num_nodes
+                        
+                        # 构建邻接矩阵
+                        adj = np.zeros((n_regions, n_regions), dtype=np.float32)
+                        edge_attr = graph[edge_type].edge_attr if hasattr(graph[edge_type], 'edge_attr') else None
+                        
+                        for i in range(edge_index.shape[1]):
+                            src = int(edge_index[0, i])
+                            dst = int(edge_index[1, i])
+                            weight = float(edge_attr[i]) if edge_attr is not None else 1.0
+                            adj[src, dst] = weight
+                        
+                        connectivity['structural'] = adj
+                        self.logger.info(f"提取结构连接矩阵: shape={adj.shape}, 非零元素={np.count_nonzero(adj)}")
+                        break
+        
+        except Exception as e:
+            self.logger.warning(f"提取连接矩阵失败: {e}")
+        
+        return connectivity
+    
+    def _load_single_pt_file(self, pt_path: Path) -> tuple:
+        """加载单个 .pt 文件"""
+        self.logger.info(f"尝试加载: {pt_path}")
+        
+        try:
+            data = torch.load(pt_path, map_location="cpu", weights_only=False)
+            
+            # 尝试识别数据格式
+            if isinstance(data, dict):
+                # 可能是模型checkpoint或数据字典
+                if 'model' in data or 'model_state_dict' in data:
+                    self.logger.warning("检测到模型checkpoint文件，无法直接用于可视化")
+                    return self._generate_example_data()
+                
+                # 尝试作为brain_data
+                brain_data = {}
+                if 'fmri' in data:
+                    brain_data['fmri'] = data['fmri']
+                if 'eeg' in data:
+                    brain_data['eeg'] = data['eeg']
+                
+                if brain_data:
+                    self.logger.info(f"成功提取数据: {list(brain_data.keys())}")
+                    return brain_data, {}
+            
+            self.logger.warning("无法识别 .pt 文件格式，使用示例数据")
+            return self._generate_example_data()
+            
+        except Exception as e:
+            self.logger.error(f"加载 .pt 文件失败: {e}")
+            return self._generate_example_data()
+    
+    def _load_json_data(self, json_path: Path) -> tuple:
+        """从JSON文件加载数据（用于已导出的Unity数据）"""
+        self.logger.info(f"从JSON加载: {json_path}")
+        
+        try:
+            with open(json_path, 'r') as f:
+                data = json.load(f)
+            
+            # 从JSON重建brain_data（简化版本）
+            brain_data = {}
+            # JSON格式通常不适合重建完整的时序数据
+            # 这里返回示例数据
+            self.logger.warning("JSON格式加载支持有限，使用示例数据")
+            return self._generate_example_data()
+            
+        except Exception as e:
+            self.logger.error(f"加载JSON失败: {e}")
+            return self._generate_example_data()
     
     def _generate_example_data(self) -> tuple:
         """生成示例数据"""
