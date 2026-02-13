@@ -265,12 +265,23 @@ Unity项目资源文件：
         logger.info(f"  ✓ 默认配置已保存: {config_path.name}")
     
     def generate_unity_scripts(self):
-        """生成Unity C#脚本"""
+        """
+        生成Unity C#脚本模板
+        
+        生成核心脚本模板供Unity使用：
+        - BrainDataLoader.cs: JSON数据加载和管理
+        - AnimationController.cs: 时间序列动画控制
+        - StimulationInput.cs: 虚拟刺激输入界面
+        - ModelInterface.cs: 与后端服务器通信接口
+        
+        这些是基础模板，用户可以根据具体需求进行自定义。
+        """
         logger.info("\n" + "="*80)
         logger.info("步骤 3: 生成Unity交互脚本")
         logger.info("="*80)
         
-        # 生成核心脚本
+        # 生成核心脚本模板（不再从unity_examples复制）
+        # 这些方法生成基础的C#脚本模板，提供开箱即用的功能
         self._generate_data_loader_script()
         self._generate_animation_controller_script()
         self._generate_stimulation_input_script()
