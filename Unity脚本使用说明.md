@@ -16,22 +16,30 @@
 2. **BrainVisualization.cs** - 主可视化控制器
    - 加载和显示大脑状态数据
    - 支持单个/多个OBJ模型
+   - **时间序列支持**: 预加载整个序列并计算全局归一化范围
+   - **统一颜色映射**: 所有数值（真实/预测）使用相同颜色刻度
    - 点击交互功能
-   - 颜色映射（真实/预测信号）
-   - 序列动画播放
+   - 序列动画播放和帧控制
 
-3. **BrainConfigLoader.cs** - 配置加载器
+3. **TimelineController.cs** - 时间轴控制器（新增）
+   - **进度条滑块**: 拖动到任意时间点
+   - **播放/暂停控制**: 控制动画播放
+   - **帧信息显示**: 当前帧/总帧数
+   - **帧步进**: 前进/后退单帧
+   - 与BrainVisualization集成
+
+4. **BrainConfigLoader.cs** - 配置加载器
    - 自动加载unity_config.json
    - 应用可视化设置
    - 配置OBJ模型路径
 
-4. **WebSocketClient.cs** - 后端通信客户端
+5. **WebSocketClient.cs** - 后端通信客户端
    - 连接TwinBrain后端服务器
    - 发送预测请求
    - 发送刺激模拟请求
    - 接收大脑状态更新
 
-5. **StimulationInput.cs** - 刺激输入控制器
+6. **StimulationInput.cs** - 刺激输入控制器
    - 用户界面控制
    - 选择目标脑区
    - 设置刺激参数
@@ -118,31 +126,59 @@ if (enableInteraction && Input.GetMouseButtonDown(0))
 }
 ```
 
-### 5. 颜色映射系统
+### 5. 时间序列可视化与颜色映射
 
-**功能**: 区分真实信号和预测信号，使用不同颜色显示。
+**重要**: 颜色映射基于整个时间序列的归一化，不区分真实/预测信号。
+
+**功能**: 
+- 加载整个时间序列并预计算全局最小/最大值
+- 所有数值（真实和预测）使用统一的颜色刻度
+- 便于观测不同时刻的状态变化
 
 **实现**:
-- `lowActivityColor` - 低活动颜色（真实信号）
-- `highActivityColor` - 高活动颜色（真实信号）
-- `predictedColor` - 预测信号颜色
+- `lowActivityColor` (蓝色) - 序列中的最小值
+- `highActivityColor` (红色) - 序列中的最大值
+- 每个时间点的颜色反映其在全局范围内的相对位置
 
-**代码示例**:
-
+**归一化公式**:
 ```csharp
-Color GetActivityColor(RegionData region)
-{
-    float activity = GetRegionActivity(region);
-    
-    if (region.activity != null && region.activity.is_predicted)
-    {
-        return Color.Lerp(lowActivityColor, predictedColor, activity);
-    }
-    
-    return Color.Lerp(lowActivityColor, highActivityColor, activity);
-}
+// 计算整个序列的全局范围
+globalMinActivity = min(所有时间点所有脑区的活动值)
+globalMaxActivity = max(所有时间点所有脑区的活动值)
+
+// 归一化每个值
+normalizedActivity = (activity - globalMinActivity) / (globalMaxActivity - globalMinActivity)
+
+// 映射到颜色
+color = Color.Lerp(蓝色, 红色, normalizedActivity)
 ```
 
+**优势**:
+- 颜色一致性：相同活动值在所有时间点显示相同颜色
+- 便于比较：可以直观比较不同时刻的活动模式
+- 统一刻度：真实和预测数据使用相同标准
+
+### 6. 时间轴控制（TimelineController.cs）
+
+**功能**: 提供交互式时间轴控制
+
+**UI组件**:
+- **进度条滑块**: 拖动到任意时间点，实时更新可视化
+- **播放/暂停按钮**: 控制动画自动播放
+- **帧信息显示**: 显示 "Frame: 5 / 100"
+- **步进按钮**: 前进/后退单帧（可选）
+
+**代码示例**:
+```csharp
+// 跳转到特定帧
+brainVis.SetFrame(50);
+
+// 获取信息
+int currentFrame = brainVis.GetCurrentFrame();
+int totalFrames = brainVis.GetTotalFrames();
+```
+
+### 7. 虚拟刺激输入
 ### 6. 虚拟刺激输入
 
 **功能**: 提供UI界面输入刺激参数并发送到后端。

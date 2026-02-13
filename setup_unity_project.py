@@ -277,7 +277,8 @@ Unity项目资源文件：
             "BrainDataStructures.cs",
             "BrainConfigLoader.cs",
             "WebSocketClient.cs",
-            "StimulationInput.cs"
+            "StimulationInput.cs",
+            "TimelineController.cs"
         ]
         
         for script in base_scripts:

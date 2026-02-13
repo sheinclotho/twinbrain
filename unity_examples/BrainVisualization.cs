@@ -74,14 +74,11 @@ namespace TwinBrain
         public bool autoPlay = true;
         
         [Header("Colors")]
-        [Tooltip("Color for low activity (real signal)")]
+        [Tooltip("Color for low activity values")]
         public Color lowActivityColor = Color.blue;
         
-        [Tooltip("Color for high activity (real signal)")]
+        [Tooltip("Color for high activity values")]
         public Color highActivityColor = Color.red;
-        
-        [Tooltip("Color for predicted signal")]
-        public Color predictedColor = Color.green;
         
         [Header("Interaction")]
         [Tooltip("Enable click interaction")]
@@ -93,9 +90,14 @@ namespace TwinBrain
         private Dictionary<int, Renderer> regionRenderers = new Dictionary<int, Renderer>();
         private List<LineRenderer> connectionLines = new List<LineRenderer>();
         private List<string> sequenceFiles;
+        private List<BrainStateData> loadedSequence = new List<BrainStateData>();
         private int currentFrame = 0;
         private bool isPlaying = false;
         private int selectedRegionId = -1;
+        
+        // Normalization values for color mapping across entire sequence
+        private float globalMinActivity = 0f;
+        private float globalMaxActivity = 1f;
         
         // Events
         public delegate void RegionClickedHandler(int regionId, RegionData regionData);
@@ -246,16 +248,36 @@ namespace TwinBrain
                     SequenceIndex index = JsonConvert.DeserializeObject<SequenceIndex>(indexContent);
                     
                     sequenceFiles = new List<string>();
+                    loadedSequence = new List<BrainStateData>();
+                    
                     foreach (string file in index.files)
                     {
-                        sequenceFiles.Add(Path.Combine(jsonPath, file));
+                        string filePath = Path.Combine(jsonPath, file);
+                        sequenceFiles.Add(filePath);
+                        
+                        // Preload all states for normalization
+                        try
+                        {
+                            string jsonContent = File.ReadAllText(filePath);
+                            BrainStateData state = JsonConvert.DeserializeObject<BrainStateData>(jsonContent);
+                            loadedSequence.Add(state);
+                        }
+                        catch (System.Exception e)
+                        {
+                            Debug.LogWarning(string.Format("Failed to preload {0}: {1}", file, e.Message));
+                        }
                     }
                     
-                    Debug.Log(string.Format("Loaded sequence with {0} frames", sequenceFiles.Count));
+                    Debug.Log(string.Format("Loaded sequence with {0} frames", loadedSequence.Count));
                     
-                    if (sequenceFiles.Count > 0)
+                    // Compute global min/max for normalization
+                    ComputeGlobalActivityRange();
+                    
+                    // Load first frame
+                    if (loadedSequence.Count > 0)
                     {
-                        LoadSingleState(sequenceFiles[0]);
+                        currentState = loadedSequence[0];
+                        UpdateVisualization();
                     }
                 }
                 else
@@ -420,18 +442,82 @@ namespace TwinBrain
         }
         
         /// <summary>
-        /// 根据活动获取颜色
+        /// 根据活动获取颜色（使用全局归一化）
         /// </summary>
         Color GetActivityColor(RegionData region)
         {
             float activity = GetRegionActivity(region);
             
-            if (region.activity != null && region.activity.isPredicted)
+            // Normalize activity using global min/max across entire sequence
+            float normalizedActivity = 0.5f;
+            if (globalMaxActivity > globalMinActivity)
             {
-                return Color.Lerp(lowActivityColor, predictedColor, activity);
+                normalizedActivity = (activity - globalMinActivity) / (globalMaxActivity - globalMinActivity);
+                normalizedActivity = Mathf.Clamp01(normalizedActivity);
             }
             
-            return Color.Lerp(lowActivityColor, highActivityColor, activity);
+            // Use single color scale for all data (real or predicted)
+            return Color.Lerp(lowActivityColor, highActivityColor, normalizedActivity);
+        }
+        
+        /// <summary>
+        /// 计算整个序列的活动值范围（用于归一化）
+        /// </summary>
+        void ComputeGlobalActivityRange()
+        {
+            if (loadedSequence == null || loadedSequence.Count == 0)
+            {
+                return;
+            }
+            
+            float minVal = float.MaxValue;
+            float maxVal = float.MinValue;
+            
+            foreach (BrainStateData state in loadedSequence)
+            {
+                if (state == null || state.brain_state == null || state.brain_state.regions == null)
+                {
+                    continue;
+                }
+                
+                foreach (RegionData region in state.brain_state.regions)
+                {
+                    float activity = GetRegionActivityRaw(region);
+                    if (activity < minVal) minVal = activity;
+                    if (activity > maxVal) maxVal = activity;
+                }
+            }
+            
+            globalMinActivity = minVal;
+            globalMaxActivity = maxVal;
+            
+            Debug.Log(string.Format("Global activity range: [{0:F3}, {1:F3}]", globalMinActivity, globalMaxActivity));
+        }
+        
+        /// <summary>
+        /// 获取脑区原始活动值（不归一化）
+        /// </summary>
+        float GetRegionActivityRaw(RegionData region)
+        {
+            if (region.activity == null) return 0f;
+            
+            // Priority: prediction > fmri > eeg
+            if (region.activity.isPredicted && region.activity.predictionValue > 0)
+            {
+                return region.activity.predictionValue;
+            }
+            
+            if (region.activity.fmri != null)
+            {
+                return region.activity.fmri.amplitude;
+            }
+            
+            if (region.activity.eeg != null)
+            {
+                return region.activity.eeg.amplitude;
+            }
+            
+            return 0f;
         }
         
         /// <summary>
@@ -544,12 +630,13 @@ namespace TwinBrain
         /// </summary>
         IEnumerator PlaySequence()
         {
-            while (isPlaying && sequenceFiles != null && currentFrame < sequenceFiles.Count)
+            while (isPlaying && loadedSequence != null && currentFrame < loadedSequence.Count)
             {
-                LoadSingleState(sequenceFiles[currentFrame]);
+                currentState = loadedSequence[currentFrame];
+                UpdateVisualization();
                 currentFrame++;
                 
-                if (currentFrame >= sequenceFiles.Count)
+                if (currentFrame >= loadedSequence.Count)
                 {
                     currentFrame = 0;
                 }
@@ -558,6 +645,37 @@ namespace TwinBrain
             }
             
             isPlaying = false;
+        }
+        
+        /// <summary>
+        /// 跳转到指定帧（用于进度条控制）
+        /// </summary>
+        public void SetFrame(int frameIndex)
+        {
+            if (loadedSequence == null || loadedSequence.Count == 0)
+            {
+                return;
+            }
+            
+            currentFrame = Mathf.Clamp(frameIndex, 0, loadedSequence.Count - 1);
+            currentState = loadedSequence[currentFrame];
+            UpdateVisualization();
+        }
+        
+        /// <summary>
+        /// 获取当前帧索引
+        /// </summary>
+        public int GetCurrentFrame()
+        {
+            return currentFrame;
+        }
+        
+        /// <summary>
+        /// 获取总帧数
+        /// </summary>
+        public int GetTotalFrames()
+        {
+            return loadedSequence != null ? loadedSequence.Count : 0;
         }
         
         /// <summary>
