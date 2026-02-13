@@ -6,11 +6,17 @@
 
 本项目包含完整的文档集：
 
+### 使用文档
 1. **[使用指南.md](使用指南.md)** - 面向无编程基础用户的完整操作指南
 2. **[Unity一键使用指南.md](Unity一键使用指南.md)** - Unity集成和可视化详细教程
-3. **[Unity脚本使用说明.md](Unity脚本使用说明.md)** - Unity C#脚本详细说明（新增）
+3. **[Unity脚本使用说明.md](Unity脚本使用说明.md)** - Unity C#脚本详细说明
+
+### 技术文档
 4. **[模型说明.md](模型说明.md)** - 模型架构、原理和技术细节
-5. **[更新日志.md](更新日志.md)** - 版本更新记录和新功能说明
+5. **[MODEL_FORMAT.md](MODEL_FORMAT.md)** - 模型和缓存文件格式规范 ⭐ 新增
+6. **[PERFORMANCE.md](PERFORMANCE.md)** - 性能优化指南 ⭐ 新增
+7. **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - 问题排查指南 ⭐ 新增
+8. **[更新日志.md](更新日志.md)** - 版本更新记录和新功能说明
 
 ## 🚀 快速开始
 
