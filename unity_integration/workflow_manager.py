@@ -427,6 +427,38 @@ class WorkflowManager:
         self.logger.warning("模型生成功能未完全实现，使用示例数据")
         return self._generate_example_data()
     
+    def _has_node_type(self, graph, node_type: str) -> bool:
+        """
+        检查图是否包含指定节点类型
+        
+        Args:
+            graph: HeteroData图对象
+            node_type: 节点类型名称 (如 'fmri', 'eeg')
+        
+        Returns:
+            bool: 是否包含该节点类型
+        """
+        return hasattr(graph, '__getitem__') and hasattr(graph, 'node_types') and node_type in graph.node_types
+    
+    def _get_preferred_eeg_state(self, states: dict):
+        """
+        获取首选的EEG状态数据
+        
+        优先使用 'on' 状态，因为通常包含任务激活的脑活动。
+        如果 'on' 不存在，使用第一个可用状态。
+        
+        Args:
+            states: EEG状态字典 {'on': HeteroData, 'off': HeteroData}
+        
+        Returns:
+            HeteroData or None
+        """
+        # 优先使用 'on' 状态（任务激活状态）
+        if 'on' in states:
+            return states['on']
+        # 回退到任何可用状态
+        return next(iter(states.values()), None) if states else None
+    
     def _unpack_hetero_cache(self, eeg_cache_path: Path, hetero_cache_path: Path) -> tuple:
         """
         解包训练生成的异构图缓存文件
@@ -459,7 +491,7 @@ class WorkflowManager:
                 for task_name, graph_list in hetero_graphs.items():
                     if isinstance(graph_list, list) and len(graph_list) > 0:
                         graph = graph_list[0]  # 使用第一个图
-                        if hasattr(graph, '__getitem__') and 'fmri' in graph.node_types:
+                        if self._has_node_type(graph, 'fmri'):
                             if hasattr(graph['fmri'], 'x_seq'):
                                 brain_data['fmri'] = graph['fmri'].x_seq
                                 self.logger.info(f"从任务 '{task_name}' 提取fMRI数据: shape={graph['fmri'].x_seq.shape}")
@@ -468,7 +500,7 @@ class WorkflowManager:
             elif isinstance(hetero_graphs, list) and len(hetero_graphs) > 0:
                 # 格式: List[HeteroData]
                 graph = hetero_graphs[0]
-                if hasattr(graph, '__getitem__') and 'fmri' in graph.node_types:
+                if self._has_node_type(graph, 'fmri'):
                     if hasattr(graph['fmri'], 'x_seq'):
                         brain_data['fmri'] = graph['fmri'].x_seq
                         self.logger.info(f"提取fMRI数据: shape={graph['fmri'].x_seq.shape}")
@@ -483,10 +515,9 @@ class WorkflowManager:
                 # 格式: Dict[task, Dict[state, HeteroData]]
                 for task_name, states in eeg_data.items():
                     if isinstance(states, dict):
-                        # 优先使用 'on' 状态，否则使用任何可用状态
-                        state_data = states.get('on', None) or next(iter(states.values()), None)
+                        state_data = self._get_preferred_eeg_state(states)
                         if state_data is not None:
-                            if hasattr(state_data, '__getitem__') and 'eeg' in state_data.node_types:
+                            if self._has_node_type(state_data, 'eeg'):
                                 if hasattr(state_data['eeg'], 'x_seq'):
                                     brain_data['eeg'] = state_data['eeg'].x_seq
                                     self.logger.info(f"从任务 '{task_name}' 提取EEG数据: shape={state_data['eeg'].x_seq.shape}")
@@ -500,7 +531,7 @@ class WorkflowManager:
             connectivity = self._extract_connectivity_from_hetero(hetero_graphs)
             
             if not brain_data:
-                self.logger.error("缓存文件中未能提取任何脑活动数据，使用示例数据")
+                self.logger.warning("缓存文件中未能提取任何脑活动数据，使用示例数据")
                 return self._generate_example_data()
             
             return brain_data, connectivity
