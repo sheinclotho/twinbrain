@@ -122,6 +122,14 @@ class BrainStateExporter:
         pred_data = None
         if predictions is not None and 'predicted_activity' in predictions:
             pred_data = predictions['predicted_activity']
+            # Warn if prediction data size doesn't match number of regions
+            if len(pred_data) != n_regions:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    f"Prediction data size mismatch: got {len(pred_data)} predictions "
+                    f"but have {n_regions} regions. Some regions may not have predictions."
+                )
         
         for region_id in range(n_regions):
             region_info = self.regions_info.get(str(region_id + 1), {})
@@ -148,15 +156,21 @@ class BrainStateExporter:
                 region_dict["activity"]["eeg"] = eeg_activity
             
             # Add prediction data if available
-            if pred_data is not None and region_id < len(pred_data):
-                pred_value = pred_data[region_id]
-                if isinstance(pred_value, torch.Tensor):
-                    pred_value = pred_value.item()
-                # Normalize prediction value to [0, 1]
-                pred_normalized = (pred_value + 3.0) / 6.0
-                pred_normalized = max(0.0, min(1.0, pred_normalized))
-                region_dict["activity"]["predictionValue"] = float(pred_normalized)
-                region_dict["activity"]["isPredicted"] = True
+            if pred_data is not None:
+                if region_id < len(pred_data):
+                    pred_value = pred_data[region_id]
+                    if isinstance(pred_value, torch.Tensor):
+                        pred_value = pred_value.item()
+                    # Normalize prediction value to [0, 1]
+                    # Assumes model output is standardized to ~[-3, 3] range
+                    # Maps: -3 → 0, 0 → 0.5, +3 → 1
+                    pred_normalized = (pred_value + 3.0) / 6.0
+                    pred_normalized = max(0.0, min(1.0, pred_normalized))
+                    region_dict["activity"]["predictionValue"] = float(pred_normalized)
+                    region_dict["activity"]["isPredicted"] = True
+                else:
+                    # Prediction data doesn't cover this region
+                    region_dict["activity"]["isPredicted"] = False
             else:
                 region_dict["activity"]["isPredicted"] = False
             
