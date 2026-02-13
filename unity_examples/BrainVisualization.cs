@@ -3,360 +3,572 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using Newtonsoft.Json;
-using TwinBrain;
 
-/// <summary>
-/// TwinBrain Unity可视化组件
-/// 
-/// 此脚本从TwinBrain加载并可视化大脑状态JSON文件。
-/// 将此脚本附加到Unity场景中的GameObject上。
-/// 
-/// Unity版本兼容性:
-/// - Unity 2017.1+ (C# 6.0支持)
-/// - 对于更早版本的Unity (2017之前), 请将 ?.  和 ?? 操作符替换为传统null检查
-/// 
-/// 依赖项:
-/// - Newtonsoft.Json（通过Package Manager安装或导入DLL）
-///   Unity 2018.1+: 通过Package Manager安装
-///   Unity 2017.x: 从NuGet下载DLL并放入Plugins文件夹
-/// - 带有Renderer组件的脑区预制体
-/// - 连接线预制体
-/// - BrainDataStructures.cs（数据结构定义）
-/// </summary>
-public class BrainVisualization : MonoBehaviour
+namespace TwinBrain
 {
-    [Header("File Settings")]
-    [Tooltip("Path to the JSON file or directory")]
-    public string jsonPath = "brain_state.json";
-    
-    [Tooltip("For sequences: load all JSON files in directory")]
-    public bool loadSequence = false;
-    
-    [Header("Visualization Settings")]
-    [Tooltip("Prefab for brain regions (e.g., sphere)")]
-    public GameObject regionPrefab;
-    
-    [Tooltip("Material for connections")]
-    public Material connectionMaterial;
-    
-    [Tooltip("Scale factor for region size")]
-    public float regionScale = 1.0f;
-    
-    [Tooltip("Minimum activity threshold to display")]
-    [Range(0f, 1f)]
-    public float activityThreshold = 0.3f;
-    
-    [Tooltip("Show connections")]
-    public bool showConnections = true;
-    
-    [Tooltip("Connection strength threshold")]
-    [Range(0f, 1f)]
-    public float connectionThreshold = 0.5f;
-    
-    [Header("Animation Settings")]
-    [Tooltip("For sequences: frame rate")]
-    public float fps = 10f;
-    
-    [Tooltip("Auto-play sequence")]
-    public bool autoPlay = true;
-    
-    [Header("Colors")]
-    [Tooltip("Color for low activity")]
-    public Color lowActivityColor = Color.blue;
-    
-    [Tooltip("Color for high activity")]
-    public Color highActivityColor = Color.red;
-    
-    // Private variables
-    private BrainStateData currentState;
-    private Dictionary<int, GameObject> regionObjects = new Dictionary<int, GameObject>();
-    private List<LineRenderer> connectionLines = new List<LineRenderer>();
-    private List<string> sequenceFiles;
-    private int currentFrame = 0;
-    private bool isPlaying = false;
-    
-    void Start()
+    /// <summary>
+    /// TwinBrain Unity可视化组件
+    /// Unity 2019+ 兼容版本
+    /// 
+    /// 此脚本从TwinBrain加载并可视化大脑状态JSON文件。
+    /// 支持单个OBJ模型和多个独立脑区OBJ模型两种模式。
+    /// 
+    /// 功能特性:
+    /// - 支持从.lh文件加载的多脑区OBJ模型
+    /// - 每个脑区对应后端模型的预测数值
+    /// - 颜色映射显示真实/预测信号
+    /// - 点击交互选择脑区
+    /// - 虚拟刺激输入
+    /// 
+    /// 依赖项:
+    /// - Newtonsoft.Json (通过Package Manager安装)
+    /// - BrainDataStructures.cs
+    /// </summary>
+    public class BrainVisualization : MonoBehaviour
     {
-        if (loadSequence)
-        {
-            LoadSequence();
-            if (autoPlay)
-            {
-                Play();
-            }
-        }
-        else
-        {
-            LoadSingleState(jsonPath);
-        }
-    }
-    
-    void Update()
-    {
-        if (Input.GetKeyDown(KeyCode.Space))
-        {
-            if (isPlaying)
-                Pause();
-            else
-                Play();
-        }
+        [Header("File Settings")]
+        [Tooltip("Path to the JSON file or directory")]
+        public string jsonPath = "brain_state.json";
         
-        if (Input.GetKeyDown(KeyCode.R))
+        [Tooltip("For sequences: load all JSON files in directory")]
+        public bool loadSequence = false;
+        
+        [Header("Model Settings")]
+        [Tooltip("Use individual OBJ models for each brain region")]
+        public bool useObjModels = true;
+        
+        [Tooltip("Directory containing region OBJ files (region_0001.obj, etc)")]
+        public string objDirectory = "StreamingAssets/OBJ";
+        
+        [Tooltip("Prefab for brain regions when not using OBJ models")]
+        public GameObject regionPrefab;
+        
+        [Header("Visualization Settings")]
+        [Tooltip("Material for connections")]
+        public Material connectionMaterial;
+        
+        [Tooltip("Scale factor for region size")]
+        public float regionScale = 1.0f;
+        
+        [Tooltip("Minimum activity threshold to display")]
+        [Range(0f, 1f)]
+        public float activityThreshold = 0.3f;
+        
+        [Tooltip("Show connections")]
+        public bool showConnections = true;
+        
+        [Tooltip("Connection strength threshold")]
+        [Range(0f, 1f)]
+        public float connectionThreshold = 0.5f;
+        
+        [Header("Animation Settings")]
+        [Tooltip("For sequences: frame rate")]
+        public float fps = 10f;
+        
+        [Tooltip("Auto-play sequence")]
+        public bool autoPlay = true;
+        
+        [Header("Colors")]
+        [Tooltip("Color for low activity (real signal)")]
+        public Color lowActivityColor = Color.blue;
+        
+        [Tooltip("Color for high activity (real signal)")]
+        public Color highActivityColor = Color.red;
+        
+        [Tooltip("Color for predicted signal")]
+        public Color predictedColor = Color.green;
+        
+        [Header("Interaction")]
+        [Tooltip("Enable click interaction")]
+        public bool enableInteraction = true;
+        
+        // Private variables
+        private BrainStateData currentState;
+        private Dictionary<int, GameObject> regionObjects = new Dictionary<int, GameObject>();
+        private Dictionary<int, Renderer> regionRenderers = new Dictionary<int, Renderer>();
+        private List<LineRenderer> connectionLines = new List<LineRenderer>();
+        private List<string> sequenceFiles;
+        private int currentFrame = 0;
+        private bool isPlaying = false;
+        private int selectedRegionId = -1;
+        
+        // Events
+        public delegate void RegionClickedHandler(int regionId, RegionData regionData);
+        public event RegionClickedHandler OnRegionClicked;
+        
+        void Start()
         {
-            Reload();
-        }
-    }
-    
-    /// <summary>
-    /// 从JSON文件加载单个大脑状态
-    /// </summary>
-    public void LoadSingleState(string path)
-    {
-        try
-        {
-            string jsonContent = File.ReadAllText(path);
-            currentState = JsonConvert.DeserializeObject<BrainStateData>(jsonContent);
-            
-            Debug.Log($"Loaded brain state: {currentState.metadata.subject} at time {currentState.brain_state.time_second}s");
-            
-            UpdateVisualization();
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"Failed to load brain state: {e.Message}");
-        }
-    }
-    
-    /// <summary>
-    /// 加载大脑状态序列
-    /// </summary>
-    public void LoadSequence()
-    {
-        try
-        {
-            // Load index file
-            string indexPath = Path.Combine(jsonPath, "sequence_index.json");
-            if (File.Exists(indexPath))
+            if (loadSequence)
             {
-                string indexContent = File.ReadAllText(indexPath);
-                var index = JsonConvert.DeserializeObject<SequenceIndex>(indexContent);
-                
-                sequenceFiles = new List<string>();
-                foreach (string file in index.files)
+                LoadSequence();
+                if (autoPlay)
                 {
-                    sequenceFiles.Add(Path.Combine(jsonPath, file));
-                }
-                
-                Debug.Log($"Loaded sequence with {sequenceFiles.Count} frames");
-                
-                // Load first frame
-                if (sequenceFiles.Count > 0)
-                {
-                    LoadSingleState(sequenceFiles[0]);
+                    Play();
                 }
             }
             else
             {
-                Debug.LogError($"Sequence index not found: {indexPath}");
+                LoadSingleState(jsonPath);
             }
         }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"Failed to load sequence: {e.Message}");
-        }
-    }
-    
-    /// <summary>
-    /// 使用当前状态更新可视化
-    /// </summary>
-    void UpdateVisualization()
-    {
-        if (currentState == null) return;
         
-        // Clear existing visualization
-        ClearVisualization();
-        
-        // Create regions
-        foreach (var region in currentState.brain_state.regions)
+        void Update()
         {
-            CreateRegion(region);
-        }
-        
-        // Create connections
-        if (showConnections)
-        {
-            foreach (var conn in currentState.brain_state.connections)
+            // Keyboard controls
+            if (Input.GetKeyDown(KeyCode.Space))
             {
-                if (conn.strength >= connectionThreshold)
+                if (isPlaying)
+                    Pause();
+                else
+                    Play();
+            }
+            
+            if (Input.GetKeyDown(KeyCode.R))
+            {
+                Reload();
+            }
+            
+            // Mouse click interaction
+            if (enableInteraction && Input.GetMouseButtonDown(0))
+            {
+                HandleMouseClick();
+            }
+        }
+        
+        /// <summary>
+        /// 处理鼠标点击事件
+        /// </summary>
+        void HandleMouseClick()
+        {
+            Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
+            RaycastHit hit;
+            
+            if (Physics.Raycast(ray, out hit))
+            {
+                GameObject hitObject = hit.collider.gameObject;
+                
+                // Find region ID from object
+                foreach (var kvp in regionObjects)
                 {
-                    CreateConnection(conn);
+                    if (kvp.Value == hitObject)
+                    {
+                        OnRegionClick(kvp.Key);
+                        break;
+                    }
                 }
             }
         }
-    }
-    
-    /// <summary>
-    /// 创建脑区可视化
-    /// </summary>
-    void CreateRegion(RegionData region)
-    {
-        // Check activity threshold
-        // Note: For Unity pre-2017, replace ?.  with: 
-        // float activity = (region.activity.fmri != null) ? region.activity.fmri.amplitude : 0f;
-        float activity = region.activity.fmri?.amplitude ?? 0f;
-        if (activity < activityThreshold) return;
         
-        // Instantiate region object
-        GameObject regionObj;
-        if (regionPrefab != null)
+        /// <summary>
+        /// 处理脑区点击
+        /// </summary>
+        void OnRegionClick(int regionId)
         {
-            regionObj = Instantiate(regionPrefab, transform);
-        }
-        else
-        {
-            regionObj = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-            regionObj.transform.SetParent(transform);
-        }
-        
-        // Set position (convert from brain coordinates)
-        Vector3 position = new Vector3(
-            region.position.x / 100f,  // Scale down
-            region.position.z / 100f,  // Z becomes Y in Unity
-            region.position.y / 100f   // Y becomes Z in Unity
-        );
-        regionObj.transform.localPosition = position;
-        
-        // Set scale based on activity
-        float scale = regionScale * (0.5f + activity * 0.5f);
-        regionObj.transform.localScale = Vector3.one * scale;
-        
-        // Set color based on activity
-        Color color = Color.Lerp(lowActivityColor, highActivityColor, activity);
-        Renderer renderer = regionObj.GetComponent<Renderer>();
-        if (renderer != null)
-        {
-            renderer.material.color = color;
-        }
-        
-        // Set name
-        regionObj.name = $"Region_{region.id}_{region.label}";
-        
-        // Store reference
-        regionObjects[region.id] = regionObj;
-    }
-    
-    /// <summary>
-    /// 创建连接可视化
-    /// </summary>
-    void CreateConnection(ConnectionData conn)
-    {
-        if (!regionObjects.ContainsKey(conn.source) || 
-            !regionObjects.ContainsKey(conn.target))
-        {
-            return;
-        }
-        
-        GameObject lineObj = new GameObject($"Connection_{conn.source}_{conn.target}");
-        lineObj.transform.SetParent(transform);
-        
-        LineRenderer line = lineObj.AddComponent<LineRenderer>();
-        // For Unity pre-2017, replace ?? with: 
-        // line.material = connectionMaterial != null ? connectionMaterial : new Material(Shader.Find("Sprites/Default"));
-        line.material = connectionMaterial ?? new Material(Shader.Find("Sprites/Default"));
-        
-        // Set positions
-        Vector3 startPos = regionObjects[conn.source].transform.position;
-        Vector3 endPos = regionObjects[conn.target].transform.position;
-        
-        line.SetPosition(0, startPos);
-        line.SetPosition(1, endPos);
-        
-        // Set width based on strength
-        float width = 0.01f * conn.strength;
-        line.startWidth = width;
-        line.endWidth = width;
-        
-        // Set color (different for structural vs functional)
-        Color lineColor = conn.type == "structural" ? Color.white : Color.yellow;
-        lineColor.a = conn.strength;
-        line.startColor = lineColor;
-        line.endColor = lineColor;
-        
-        connectionLines.Add(line);
-    }
-    
-    /// <summary>
-    /// 清除所有可视化
-    /// </summary>
-    void ClearVisualization()
-    {
-        // Destroy region objects
-        foreach (var obj in regionObjects.Values)
-        {
-            Destroy(obj);
-        }
-        regionObjects.Clear();
-        
-        // Destroy connection lines
-        foreach (var line in connectionLines)
-        {
-            Destroy(line.gameObject);
-        }
-        connectionLines.Clear();
-    }
-    
-    /// <summary>
-    /// 播放序列动画
-    /// </summary>
-    public void Play()
-    {
-        if (sequenceFiles == null || sequenceFiles.Count == 0) return;
-        
-        isPlaying = true;
-        StartCoroutine(PlaySequence());
-    }
-    
-    /// <summary>
-    /// 暂停序列动画
-    /// </summary>
-    public void Pause()
-    {
-        isPlaying = false;
-    }
-    
-    /// <summary>
-    /// 重新加载当前状态
-    /// </summary>
-    public void Reload()
-    {
-        if (loadSequence)
-        {
-            LoadSequence();
-        }
-        else
-        {
-            LoadSingleState(jsonPath);
-        }
-    }
-    
-    /// <summary>
-    /// 播放序列的协程
-    /// </summary>
-    IEnumerator PlaySequence()
-    {
-        while (isPlaying && currentFrame < sequenceFiles.Count)
-        {
-            LoadSingleState(sequenceFiles[currentFrame]);
-            currentFrame++;
+            selectedRegionId = regionId;
             
-            if (currentFrame >= sequenceFiles.Count)
+            if (currentState != null)
             {
-                currentFrame = 0; // Loop
+                RegionData regionData = currentState.brain_state.regions.Find(r => r.id == regionId);
+                if (regionData != null)
+                {
+                    Debug.Log(string.Format("Clicked Region {0}: {1}, Activity: {2:F3}", 
+                        regionId, regionData.label, GetRegionActivity(regionData)));
+                    
+                    if (OnRegionClicked != null)
+                    {
+                        OnRegionClicked(regionId, regionData);
+                    }
+                    
+                    // Highlight selected region
+                    HighlightRegion(regionId);
+                }
+            }
+        }
+        
+        /// <summary>
+        /// 高亮选中的脑区
+        /// </summary>
+        void HighlightRegion(int regionId)
+        {
+            // Reset all regions
+            foreach (var kvp in regionRenderers)
+            {
+                if (kvp.Value != null)
+                {
+                    kvp.Value.material.SetFloat("_Emission", 0f);
+                }
             }
             
-            yield return new WaitForSeconds(1f / fps);
+            // Highlight selected region
+            if (regionRenderers.ContainsKey(regionId) && regionRenderers[regionId] != null)
+            {
+                regionRenderers[regionId].material.SetFloat("_Emission", 0.5f);
+            }
         }
         
-        isPlaying = false;
+        /// <summary>
+        /// 从JSON文件加载单个大脑状态
+        /// </summary>
+        public void LoadSingleState(string path)
+        {
+            try
+            {
+                string jsonContent = File.ReadAllText(path);
+                currentState = JsonConvert.DeserializeObject<BrainStateData>(jsonContent);
+                
+                Debug.Log(string.Format("Loaded brain state: {0} at time {1:F2}s", 
+                    currentState.metadata.subject, currentState.brain_state.time_second));
+                
+                UpdateVisualization();
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError(string.Format("Failed to load brain state: {0}", e.Message));
+            }
+        }
+        
+        /// <summary>
+        /// 加载大脑状态序列
+        /// </summary>
+        public void LoadSequence()
+        {
+            try
+            {
+                string indexPath = Path.Combine(jsonPath, "sequence_index.json");
+                if (File.Exists(indexPath))
+                {
+                    string indexContent = File.ReadAllText(indexPath);
+                    SequenceIndex index = JsonConvert.DeserializeObject<SequenceIndex>(indexContent);
+                    
+                    sequenceFiles = new List<string>();
+                    foreach (string file in index.files)
+                    {
+                        sequenceFiles.Add(Path.Combine(jsonPath, file));
+                    }
+                    
+                    Debug.Log(string.Format("Loaded sequence with {0} frames", sequenceFiles.Count));
+                    
+                    if (sequenceFiles.Count > 0)
+                    {
+                        LoadSingleState(sequenceFiles[0]);
+                    }
+                }
+                else
+                {
+                    Debug.LogError(string.Format("Sequence index not found: {0}", indexPath));
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError(string.Format("Failed to load sequence: {0}", e.Message));
+            }
+        }
+        
+        /// <summary>
+        /// 使用当前状态更新可视化
+        /// </summary>
+        void UpdateVisualization()
+        {
+            if (currentState == null) return;
+            
+            ClearVisualization();
+            
+            // Create regions
+            foreach (RegionData region in currentState.brain_state.regions)
+            {
+                CreateRegion(region);
+            }
+            
+            // Create connections
+            if (showConnections && currentState.brain_state.connections != null)
+            {
+                foreach (ConnectionData conn in currentState.brain_state.connections)
+                {
+                    if (conn.strength >= connectionThreshold)
+                    {
+                        CreateConnection(conn);
+                    }
+                }
+            }
+        }
+        
+        /// <summary>
+        /// 创建脑区可视化
+        /// </summary>
+        void CreateRegion(RegionData region)
+        {
+            float activity = GetRegionActivity(region);
+            if (activity < activityThreshold) return;
+            
+            GameObject regionObj = null;
+            
+            if (useObjModels)
+            {
+                // Load OBJ model for this region
+                string objPath = Path.Combine(objDirectory, string.Format("region_{0:D4}.obj", region.id));
+                regionObj = LoadObjModel(objPath);
+            }
+            
+            // Fallback to prefab or primitive
+            if (regionObj == null)
+            {
+                if (regionPrefab != null)
+                {
+                    regionObj = Instantiate(regionPrefab, transform);
+                }
+                else
+                {
+                    regionObj = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                    regionObj.transform.SetParent(transform);
+                    
+                    // Add collider for interaction
+                    if (enableInteraction)
+                    {
+                        Collider col = regionObj.GetComponent<Collider>();
+                        if (col == null)
+                        {
+                            regionObj.AddComponent<SphereCollider>();
+                        }
+                    }
+                }
+            }
+            
+            // Set position (convert from brain coordinates)
+            Vector3 position = new Vector3(
+                region.position.x / 100f,
+                region.position.z / 100f,
+                region.position.y / 100f
+            );
+            regionObj.transform.localPosition = position;
+            
+            // Set scale based on activity
+            float scale = regionScale * (0.5f + activity * 0.5f);
+            regionObj.transform.localScale = Vector3.one * scale;
+            
+            // Set color based on activity and prediction status
+            Color color = GetActivityColor(region);
+            Renderer renderer = regionObj.GetComponent<Renderer>();
+            if (renderer != null)
+            {
+                renderer.material.color = color;
+                regionRenderers[region.id] = renderer;
+            }
+            
+            // Set name
+            regionObj.name = string.Format("Region_{0}_{1}", region.id, region.label);
+            
+            // Store reference
+            regionObjects[region.id] = regionObj;
+        }
+        
+        /// <summary>
+        /// 加载OBJ模型
+        /// </summary>
+        GameObject LoadObjModel(string objPath)
+        {
+            if (!File.Exists(objPath))
+            {
+                return null;
+            }
+            
+            try
+            {
+                // Note: Unity doesn't have built-in OBJ loader at runtime
+                // This requires either:
+                // 1. Pre-import OBJ files as assets in Editor
+                // 2. Use a runtime OBJ loader plugin (e.g., TriLib, Runtime OBJ Importer)
+                // 3. Convert OBJ to Unity-compatible format
+                
+                Debug.LogWarning(string.Format("OBJ runtime loading not implemented. Use Editor import or runtime OBJ loader plugin for: {0}", objPath));
+                return null;
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError(string.Format("Failed to load OBJ model: {0}", e.Message));
+                return null;
+            }
+        }
+        
+        /// <summary>
+        /// 获取脑区活动值
+        /// </summary>
+        float GetRegionActivity(RegionData region)
+        {
+            if (region.activity == null) return 0f;
+            
+            if (region.activity.is_predicted && region.activity.prediction_value > 0)
+            {
+                return region.activity.prediction_value;
+            }
+            
+            if (region.activity.fmri != null)
+            {
+                return region.activity.fmri.amplitude;
+            }
+            
+            if (region.activity.eeg != null)
+            {
+                return region.activity.eeg.amplitude;
+            }
+            
+            return 0f;
+        }
+        
+        /// <summary>
+        /// 根据活动获取颜色
+        /// </summary>
+        Color GetActivityColor(RegionData region)
+        {
+            float activity = GetRegionActivity(region);
+            
+            if (region.activity != null && region.activity.is_predicted)
+            {
+                return Color.Lerp(lowActivityColor, predictedColor, activity);
+            }
+            
+            return Color.Lerp(lowActivityColor, highActivityColor, activity);
+        }
+        
+        /// <summary>
+        /// 创建连接可视化
+        /// </summary>
+        void CreateConnection(ConnectionData conn)
+        {
+            if (!regionObjects.ContainsKey(conn.source) || 
+                !regionObjects.ContainsKey(conn.target))
+            {
+                return;
+            }
+            
+            GameObject lineObj = new GameObject(string.Format("Connection_{0}_{1}", conn.source, conn.target));
+            lineObj.transform.SetParent(transform);
+            
+            LineRenderer line = lineObj.AddComponent<LineRenderer>();
+            
+            if (connectionMaterial != null)
+            {
+                line.material = connectionMaterial;
+            }
+            else
+            {
+                line.material = new Material(Shader.Find("Sprites/Default"));
+            }
+            
+            // Set positions
+            Vector3 startPos = regionObjects[conn.source].transform.position;
+            Vector3 endPos = regionObjects[conn.target].transform.position;
+            
+            line.SetPosition(0, startPos);
+            line.SetPosition(1, endPos);
+            
+            // Set width based on strength
+            float width = 0.01f * conn.strength;
+            line.startWidth = width;
+            line.endWidth = width;
+            
+            // Set color (different for structural vs functional)
+            Color lineColor = conn.type == "structural" ? Color.white : Color.yellow;
+            lineColor.a = conn.strength;
+            line.startColor = lineColor;
+            line.endColor = lineColor;
+            
+            connectionLines.Add(line);
+        }
+        
+        /// <summary>
+        /// 清除所有可视化
+        /// </summary>
+        void ClearVisualization()
+        {
+            foreach (GameObject obj in regionObjects.Values)
+            {
+                if (obj != null)
+                {
+                    Destroy(obj);
+                }
+            }
+            regionObjects.Clear();
+            regionRenderers.Clear();
+            
+            foreach (LineRenderer line in connectionLines)
+            {
+                if (line != null)
+                {
+                    Destroy(line.gameObject);
+                }
+            }
+            connectionLines.Clear();
+        }
+        
+        /// <summary>
+        /// 播放序列动画
+        /// </summary>
+        public void Play()
+        {
+            if (sequenceFiles == null || sequenceFiles.Count == 0) return;
+            
+            isPlaying = true;
+            StartCoroutine(PlaySequence());
+        }
+        
+        /// <summary>
+        /// 暂停序列动画
+        /// </summary>
+        public void Pause()
+        {
+            isPlaying = false;
+        }
+        
+        /// <summary>
+        /// 重新加载当前状态
+        /// </summary>
+        public void Reload()
+        {
+            if (loadSequence)
+            {
+                LoadSequence();
+            }
+            else
+            {
+                LoadSingleState(jsonPath);
+            }
+        }
+        
+        /// <summary>
+        /// 播放序列的协程
+        /// </summary>
+        IEnumerator PlaySequence()
+        {
+            while (isPlaying && sequenceFiles != null && currentFrame < sequenceFiles.Count)
+            {
+                LoadSingleState(sequenceFiles[currentFrame]);
+                currentFrame++;
+                
+                if (currentFrame >= sequenceFiles.Count)
+                {
+                    currentFrame = 0;
+                }
+                
+                yield return new WaitForSeconds(1f / fps);
+            }
+            
+            isPlaying = false;
+        }
+        
+        /// <summary>
+        /// 获取当前选中的脑区ID
+        /// </summary>
+        public int GetSelectedRegionId()
+        {
+            return selectedRegionId;
+        }
+        
+        /// <summary>
+        /// 获取当前状态
+        /// </summary>
+        public BrainStateData GetCurrentState()
+        {
+            return currentState;
+        }
     }
 }
