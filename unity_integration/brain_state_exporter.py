@@ -194,8 +194,17 @@ class BrainStateExporter:
         region_data: torch.Tensor,
         time_point: int
     ) -> Dict[str, float]:
-        """Compute fMRI activity metrics for a region."""
-        # region_data shape: [T, F]
+        """
+        Compute fMRI activity metrics for a region with memory optimization.
+        
+        Uses CPU conversion and explicit cleanup to minimize memory usage.
+        """
+        # Ensure data is on CPU and detached to save memory
+        if region_data.is_cuda:
+            region_data = region_data.cpu()
+        region_data = region_data.detach()
+        
+        # region_data shape: [T, F] or [T]
         if len(region_data.shape) == 1:
             # Single feature dimension
             activity = region_data[time_point].item() if time_point < len(region_data) else 0.0
@@ -220,7 +229,14 @@ class BrainStateExporter:
         region_data: torch.Tensor,
         time_point: int
     ) -> Dict[str, Any]:
-        """Compute EEG activity metrics for a region."""
+        """
+        Compute EEG activity metrics for a region with memory optimization.
+        """
+        # Ensure data is on CPU and detached
+        if region_data.is_cuda:
+            region_data = region_data.cpu()
+        region_data = region_data.detach()
+        
         if len(region_data.shape) == 1:
             activity = region_data[time_point].item() if time_point < len(region_data) else 0.0
         else:
@@ -242,45 +258,81 @@ class BrainStateExporter:
         self,
         connectivity: Optional[Dict[str, np.ndarray]]
     ) -> List[Dict[str, Any]]:
-        """Export connectivity information."""
+        """
+        Export connectivity information with memory optimization.
+        
+        Uses sparse representation and thresholding to reduce output size.
+        """
         if connectivity is None:
             return []
         
         connections = []
+        max_connections = 10000  # Limit total connections for performance
         
         # Process structural connectivity
         if 'structural' in connectivity:
             struct_conn = connectivity['structural']
             threshold = 0.3  # Only include strong connections
             
-            for i in range(struct_conn.shape[0]):
-                for j in range(i + 1, struct_conn.shape[1]):
-                    strength = float(struct_conn[i, j])
-                    if abs(strength) > threshold:
-                        connections.append({
-                            "source": int(i),
-                            "target": int(j),
-                            "strength": abs(strength),
-                            "type": "structural",
-                            "bidirectional": True
-                        })
+            # Use numpy operations for efficiency
+            i_indices, j_indices = np.triu_indices(struct_conn.shape[0], k=1)
+            strengths = struct_conn[i_indices, j_indices]
+            strong_mask = np.abs(strengths) > threshold
+            
+            # Filter to only strong connections
+            strong_i = i_indices[strong_mask]
+            strong_j = j_indices[strong_mask]
+            strong_strengths = strengths[strong_mask]
+            
+            # Limit number of connections
+            if len(strong_i) > max_connections // 2:
+                # Sort by strength and keep top connections
+                top_indices = np.argsort(np.abs(strong_strengths))[-max_connections // 2:]
+                strong_i = strong_i[top_indices]
+                strong_j = strong_j[top_indices]
+                strong_strengths = strong_strengths[top_indices]
+            
+            for idx in range(len(strong_i)):
+                connections.append({
+                    "source": int(strong_i[idx]),
+                    "target": int(strong_j[idx]),
+                    "strength": float(np.abs(strong_strengths[idx])),
+                    "type": "structural",
+                    "bidirectional": True
+                })
         
         # Process functional connectivity
         if 'functional' in connectivity:
             func_conn = connectivity['functional']
             threshold = 0.3
             
-            for i in range(func_conn.shape[0]):
-                for j in range(i + 1, func_conn.shape[1]):
-                    strength = float(func_conn[i, j])
-                    if abs(strength) > threshold:
-                        connections.append({
-                            "source": int(i),
-                            "target": int(j),
-                            "strength": abs(strength),
-                            "type": "functional",
-                            "correlation": strength
-                        })
+            # Use numpy operations for efficiency
+            i_indices, j_indices = np.triu_indices(func_conn.shape[0], k=1)
+            strengths = func_conn[i_indices, j_indices]
+            strong_mask = np.abs(strengths) > threshold
+            
+            # Filter to only strong connections
+            strong_i = i_indices[strong_mask]
+            strong_j = j_indices[strong_mask]
+            strong_strengths = strengths[strong_mask]
+            
+            # Limit number of connections
+            remaining = max_connections - len(connections)
+            if len(strong_i) > remaining:
+                # Sort by strength and keep top connections
+                top_indices = np.argsort(np.abs(strong_strengths))[-remaining:]
+                strong_i = strong_i[top_indices]
+                strong_j = strong_j[top_indices]
+                strong_strengths = strong_strengths[top_indices]
+            
+            for idx in range(len(strong_i)):
+                connections.append({
+                    "source": int(strong_i[idx]),
+                    "target": int(strong_j[idx]),
+                    "strength": float(np.abs(strong_strengths[idx])),
+                    "type": "functional",
+                    "correlation": float(strong_strengths[idx])
+                })
         
         return connections
     
