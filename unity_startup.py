@@ -1,23 +1,37 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TwinBrain Unity 一键启动脚本
-============================
+TwinBrain Unity 后端服务器启动脚本
+================================
 
-这个脚本提供了TwinBrain Unity集成的完整启动流程。
+此脚本用于启动Unity运行时的后端服务：
+1. 加载训练好的模型
+2. 启动WebSocket服务器，监听Unity客户端连接
+3. 接收预测请求，生成预测结果JSON
+4. 接收刺激模拟请求，计算刺激效果
+5. 自动将预测/刺激结果保存到指定文件夹供Unity读取
 
-功能:
-1. 检查环境和依赖
-2. 启动WebSocket后端服务器
-3. 加载训练好的模型
-4. 提供实时预测和刺激模拟
-5. 导出大脑状态数据供Unity使用
+注意：此脚本与 setup_unity_project.py 的区别：
+- setup_unity_project.py: 项目初始化（运行一次），生成OBJ模型、脚本、配置
+- unity_startup.py: 运行时服务器（每次使用时运行），提供后端预测和WebSocket通信
+
+工作流程：
+1. 首次使用：运行 setup_unity_project.py --freesurfer-dir /path/to/fs
+2. 启动Unity项目，导入生成的脚本和资源
+3. 每次使用时：运行此脚本启动后端服务
+4. Unity连接到后端，发送预测/刺激请求
+5. 后端自动将结果保存为JSON文件
+6. Unity自动加载JSON并可视化
 
 使用方法:
-    python unity_startup.py --model path/to/model.pth --port 8765
-
-作者: TwinBrain Team
-日期: 2024-02-13
+    # 启动后端服务器（带模型）
+    python unity_startup.py --model path/to/model.pth
+    
+    # 演示模式（无模型）
+    python unity_startup.py --demo
+    
+    # 指定输出目录
+    python unity_startup.py --model model.pth --output Unity_TwinBrain/state
 """
 
 import argparse
