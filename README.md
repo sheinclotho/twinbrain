@@ -8,22 +8,20 @@
 
 ### 使用指南（根目录）
 1. **[使用指南.md](使用指南.md)** - 面向无编程基础用户的完整操作指南
-2. **[Unity一键使用指南.md](Unity一键使用指南.md)** - Unity集成和可视化详细教程
-3. **[Unity工作流程详细说明.md](Unity工作流程详细说明.md)** - Unity工作流详细说明
-4. **[Unity脚本使用说明.md](Unity脚本使用说明.md)** - Unity C#脚本详细说明
+2. **[Unity使用指南.md](Unity使用指南.md)** - Unity可视化简明使用指南 ⭐
+3. **[Unity架构说明.md](Unity架构说明.md)** - Unity部分技术架构说明
 
 ### 技术文档（根目录）
-5. **[模型说明.md](模型说明.md)** - 模型架构、原理和技术细节
-6. **[MODEL_FORMAT.md](MODEL_FORMAT.md)** - 模型和缓存文件格式规范 ⭐
-7. **[PERFORMANCE.md](PERFORMANCE.md)** - 性能优化指南 ⭐
-8. **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - 问题排查指南 ⭐
-9. **[项目规范说明书.md](项目规范说明书.md)** - 项目开发规范
+4. **[模型说明.md](模型说明.md)** - 模型架构、原理和技术细节
+5. **[MODEL_FORMAT.md](MODEL_FORMAT.md)** - 模型和缓存文件格式规范 ⭐
+6. **[PERFORMANCE.md](PERFORMANCE.md)** - 性能优化指南 ⭐
+7. **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - 问题排查指南 ⭐
+8. **[项目规范说明书.md](项目规范说明书.md)** - 项目开发规范
 
 ### 项目更新记录（docs/目录）
-10. **[docs/更新日志.md](docs/更新日志.md)** - 版本更新记录和新功能说明
-11. **[docs/Unity重构完成报告.md](docs/Unity重构完成报告.md)** - Unity重构报告
-12. **[docs/REORGANIZATION_SUMMARY.md](docs/REORGANIZATION_SUMMARY.md)** - 项目重组总结
-13. **[docs/OPTIMIZATION_SUMMARY.md](docs/OPTIMIZATION_SUMMARY.md)** - 本次优化总结
+9. **[docs/更新日志.md](docs/更新日志.md)** - 版本更新记录和新功能说明
+10. **[docs/REORGANIZATION_SUMMARY.md](docs/REORGANIZATION_SUMMARY.md)** - 项目重组总结
+11. **[docs/OPTIMIZATION_SUMMARY.md](docs/OPTIMIZATION_SUMMARY.md)** - 本次优化总结
 
 ## 🚀 快速开始
 
@@ -82,25 +80,18 @@ python unity_startup.py --demo
 twinbrain/
 ├── docs/                       # 项目更新和重组文档
 │   ├── 更新日志.md
-│   ├── Unity重构完成报告.md
 │   ├── REORGANIZATION_SUMMARY.md
 │   └── OPTIMIZATION_SUMMARY.md
 ├── unity_integration/          # Unity集成模块
 │   ├── obj_generator.py        # OBJ 3D模型生成（支持独立导出多个脑区）
 │   ├── freesurfer_loader.py    # FreeSurfer数据加载
 │   ├── brain_state_exporter.py # JSON数据导出
+│   ├── realtime_server.py      # 实时WebSocket服务器
 │   └── workflow_manager.py     # 工作流管理（支持缓存加载）
-├── unity_examples/             # Unity C#脚本（已修复兼容性）
-│   ├── BrainVisualization.cs   # 主可视化控制器
-│   ├── BrainConfigLoader.cs    # 配置加载器
-│   ├── BrainDataStructures.cs  # 数据结构定义
-│   ├── WebSocketClient.cs      # 后端通信客户端
-│   └── StimulationInput.cs     # 虚拟刺激输入UI
 ├── mapper/                     # 脑图谱和数据映射
 ├── workflows/                  # 训练和预处理工作流
 ├── setup_unity_project.py      # 一键式Unity项目设置（推荐使用）
-├── unity_startup.py            # Unity后端服务启动脚本
-└── example_*.py                # 各种功能示例脚本
+└── unity_startup.py            # Unity后端服务启动脚本
 ```
 
 ## 🎯 使用场景
