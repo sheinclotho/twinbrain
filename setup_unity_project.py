@@ -1,25 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TwinBrain Unity 一键式自动化设置脚本
-===================================
+TwinBrain Unity 项目设置脚本
+===========================
 
-完全自动化Unity工作流程：
-1. 创建必需的文件夹结构（FreeSurfer文件夹 + 数据/缓存/模型输出文件夹）
-2. 读取FreeSurfer文件并生成Unity配置
-3. 自动生成所有必需的脚本和配置
-4. 启动后端模型服务（支持加载训练好的模型）
-5. 提供Unity中可用的按钮接口
+此脚本用于一次性项目初始化和结构生成：
+1. 创建Unity项目文件夹结构
+2. 从FreeSurfer文件生成多个独立脑区OBJ模型（region_0001.obj, region_0002.obj, ...）
+3. 生成Unity C#脚本和配置文件
+4. 创建示例数据和文档
+
+注意：此脚本与 unity_startup.py 的区别：
+- setup_unity_project.py: 项目初始化（运行一次），生成OBJ模型、脚本、配置
+- unity_startup.py: 运行时服务器（每次使用时运行），提供后端预测和WebSocket通信
 
 使用方法:
-    # 完整自动化设置
-    python setup_unity_project.py --auto-setup
-    
-    # 使用FreeSurfer文件设置
+    # 完整自动化设置（使用FreeSurfer文件生成多脑区OBJ）
     python setup_unity_project.py --freesurfer-dir ./freesurfer_files
     
-    # 启动后端服务器（加载训练模型）
-    python setup_unity_project.py --serve --model-path results/hetero_gnn_trained.pt
+    # 基础设置（不使用FreeSurfer，仅创建结构）
+    python setup_unity_project.py --auto-setup
+    
+    # 然后在使用时启动后端服务器（见 unity_startup.py）
+    python unity_startup.py --model results/model.pth
 """
 
 import argparse
@@ -225,6 +228,7 @@ Unity项目资源文件：
                 freesurfer_rh_annot=str(self.freesurfer_dir / "rh.Schaefer2018_200Parcels_7Networks_order.annot"),
                 output_dir=str(self.unity_assets_dir),
                 export_formats=['json', 'obj'],
+                export_obj_per_region=True,  # 重要：生成每个脑区的独立OBJ文件
                 export_surface_mesh=True,
                 generate_unity_config=True,
                 generate_materials=True,
@@ -270,8 +274,11 @@ Unity项目资源文件：
         source_scripts_dir = self.project_root / "unity_examples"
         base_scripts = [
             "BrainVisualization.cs",
+            "BrainDataStructures.cs",
             "BrainConfigLoader.cs",
-            "WebSocketClient.cs"
+            "WebSocketClient.cs",
+            "StimulationInput.cs",
+            "TimelineController.cs"
         ]
         
         for script in base_scripts:
@@ -280,12 +287,12 @@ Unity项目资源文件：
                 dst = self.unity_scripts_dir / script
                 shutil.copy2(src, dst)
                 logger.info(f"  ✓ 复制脚本: {script}")
+            else:
+                logger.warning(f"  ⚠ 脚本未找到: {script}")
         
-        # 生成增强的交互控制脚本
-        self._generate_data_loader_script()
-        self._generate_animation_controller_script()
-        self._generate_stimulation_input_script()
-        self._generate_model_interface_script()
+        # Note: Additional helper scripts like DataLoader, AnimationController, 
+        # and ModelInterface can be generated if needed, but the core scripts
+        # (BrainVisualization, StimulationInput, etc.) are now copied from unity_examples
         
         logger.info("  ✓ Unity脚本生成完成")
     

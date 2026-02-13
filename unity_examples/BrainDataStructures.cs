@@ -1,15 +1,12 @@
 using UnityEngine;
 using System.Collections.Generic;
 
-/// <summary>
-/// TwinBrain数据结构定义
-/// 
-/// 这个文件包含了TwinBrain JSON数据的所有数据类定义。
-/// 被BrainVisualization和WebSocketClient共享使用，避免重复定义。
-/// </summary>
+// TwinBrain数据结构定义
+// Unity 2019+ 兼容版本
+// 所有数据类匹配TwinBrain JSON格式
+
 namespace TwinBrain
 {
-    // 数据类匹配TwinBrain JSON格式
     [System.Serializable]
     public class BrainStateData
     {
@@ -62,6 +59,11 @@ namespace TwinBrain
     {
         public FMRIActivity fmri;
         public EEGActivity eeg;
+        
+        // C# convention: Use PascalCase for properties
+        // Note: JSON deserialization will still work with snake_case JSON fields
+        public float predictionValue;
+        public bool isPredicted;
     }
 
     [System.Serializable]
@@ -102,6 +104,12 @@ namespace TwinBrain
         public bool active;
         public List<int> target_regions;
         public float amplitude;
+        
+        /// <summary>
+        /// Stimulation pattern type
+        /// Valid values: "constant", "sine", "pulse", "ramp"
+        /// </summary>
+        public string pattern;
     }
 
     [System.Serializable]
@@ -115,7 +123,6 @@ namespace TwinBrain
         public List<string> files;
     }
 
-    // Unity配置数据结构
     [System.Serializable]
     public class UnityConfig
     {
@@ -144,6 +151,7 @@ namespace TwinBrain
         public bool show_connections;
         public int fps;
         public bool auto_play;
+        public bool use_obj_models;
     }
 
     [System.Serializable]
@@ -151,6 +159,7 @@ namespace TwinBrain
     {
         public ColorRGB low_activity;
         public ColorRGB high_activity;
+        public ColorRGB predicted_signal;
         public ColorRGBA connection_structural;
         public ColorRGBA connection_functional;
     }
@@ -188,5 +197,38 @@ namespace TwinBrain
         public int start_frame;
         public int end_frame;
         public int frame_step;
+    }
+
+    [System.Serializable]
+    public class PredictionRequest
+    {
+        public string type;
+        public int n_steps;
+        public List<float> current_state;
+    }
+
+    [System.Serializable]
+    public class PredictionResponse
+    {
+        public string type;
+        public bool success;
+        public List<BrainStateData> predictions;
+        public string message;
+    }
+
+    [System.Serializable]
+    public class StimulationRequest
+    {
+        public string type;
+        public StimulationData stimulation;
+    }
+
+    [System.Serializable]
+    public class StimulationResponse
+    {
+        public string type;
+        public bool success;
+        public BrainStateData result;
+        public string message;
     }
 }

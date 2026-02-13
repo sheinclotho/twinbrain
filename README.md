@@ -4,12 +4,13 @@
 
 ## 📚 文档
 
-本项目包含4个核心文档：
+本项目包含完整的文档集：
 
 1. **[使用指南.md](使用指南.md)** - 面向无编程基础用户的完整操作指南
 2. **[Unity一键使用指南.md](Unity一键使用指南.md)** - Unity集成和可视化详细教程
-3. **[模型说明.md](模型说明.md)** - 模型架构、原理和技术细节
-4. **[更新日志.md](更新日志.md)** - 版本更新记录和新功能说明
+3. **[Unity脚本使用说明.md](Unity脚本使用说明.md)** - Unity C#脚本详细说明（新增）
+4. **[模型说明.md](模型说明.md)** - 模型架构、原理和技术细节
+5. **[更新日志.md](更新日志.md)** - 版本更新记录和新功能说明
 
 ## 🚀 快速开始
 
@@ -32,6 +33,9 @@ python setup_unity_project.py --auto-setup
 
 # 使用FreeSurfer数据自动生成OBJ模型
 python setup_unity_project.py --freesurfer-dir /path/to/freesurfer/files
+
+# 启动Unity后端服务（支持实时预测和刺激）
+python unity_startup.py --demo
 ```
 
 ## 📖 详细说明
@@ -43,9 +47,12 @@ python setup_unity_project.py --freesurfer-dir /path/to/freesurfer/files
 - ✅ 多模态脑数据集成（fMRI、EEG、DTI）
 - ✅ 基于异构图神经网络的大脑建模
 - ✅ FreeSurfer表面数据支持
-- ✅ Unity 3D实时可视化
+- ✅ Unity 3D实时可视化（Unity 2019+兼容）
 - ✅ 数百个独立脑区OBJ模型生成（支持脑膜模拟）
-- ✅ 大脑状态预测和刺激模拟
+- ✅ 点击交互选择脑区
+- ✅ 虚拟刺激输入和模拟
+- ✅ 大脑状态预测和实时反馈
+- ✅ 颜色映射区分真实/预测信号
 - ✅ WebSocket实时通信
 - ✅ 完全自动化的工作流
 
@@ -65,14 +72,16 @@ twinbrain/
 │   ├── freesurfer_loader.py    # FreeSurfer数据加载
 │   ├── brain_state_exporter.py # JSON数据导出
 │   └── workflow_manager.py     # 工作流管理
-├── unity_examples/             # Unity C#示例脚本
-│   ├── BrainVisualization.cs
-│   ├── BrainConfigLoader.cs
-│   ├── BrainDataStructures.cs
-│   └── WebSocketClient.cs
+├── unity_examples/             # Unity C#脚本（已修复兼容性）
+│   ├── BrainVisualization.cs   # 主可视化控制器
+│   ├── BrainConfigLoader.cs    # 配置加载器
+│   ├── BrainDataStructures.cs  # 数据结构定义
+│   ├── WebSocketClient.cs      # 后端通信客户端
+│   └── StimulationInput.cs     # 虚拟刺激输入UI
 ├── mapper/                     # 脑图谱和数据映射
 ├── workflows/                  # 训练和预处理工作流
 ├── setup_unity_project.py      # 一键式Unity项目设置（推荐使用）
+├── unity_startup.py            # Unity后端服务启动脚本（新增）
 └── example_*.py                # 各种功能示例脚本
 ```
 

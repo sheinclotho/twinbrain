@@ -40,8 +40,15 @@ python setup_unity_project.py --auto-setup
 **这会生成：**
 - ✅ 200个脑区的真实3D OBJ模型（从FreeSurfer）
 - ✅ 正确的文件夹结构（freesurfer/, data/, state/）
-- ✅ Unity C#脚本
+- ✅ Unity C#脚本（已修复命名空间和兼容性问题）
 - ✅ 配置文件和说明文档
+
+**生成的Unity脚本（Unity 2019+兼容）：**
+- `BrainDataStructures.cs` - 数据结构定义
+- `BrainVisualization.cs` - 主可视化控制器（支持多OBJ、点击交互）
+- `BrainConfigLoader.cs` - 配置加载器
+- `WebSocketClient.cs` - 后端通信客户端
+- `StimulationInput.cs` - 虚拟刺激输入UI控制器
 
 ### 阶段2: 准备数据
 
