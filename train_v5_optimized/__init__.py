@@ -2,26 +2,37 @@
 TwinBrain V5 Optimized Training Components
 ==========================================
 
-This package contains enhanced training components for improved:
-1. EEG-fMRI energy balance
-2. EEG silent channel handling
-3. Multi-step prediction capabilities
-4. fMRI prediction accuracy
+This package contains BOTH:
+1. V5 Optimizations (adaptive loss, EEG enhancement, advanced prediction)
+2. Complete Graph-Native Reimagination (NEW!)
 
-Modules:
+V5 Optimizations:
 - adaptive_loss_balancer: GradNorm-based adaptive loss weighting
 - eeg_channel_handler: Enhanced EEG channel processing
 - advanced_prediction: Hierarchical multi-step prediction
 
-Usage:
+Graph-Native System (NEW!):
+- graph_native_mapper: Build and maintain graph structure
+- graph_native_encoder: Spatial-temporal graph convolution
+- graph_native_system: Complete end-to-end training system
+
+Usage (V5 Optimizations):
     from train_v5_optimized import (
         AdaptiveLossBalancer,
         EnhancedEEGHandler,
         EnhancedMultiStepPredictor,
     )
+
+Usage (Graph-Native System):
+    from train_v5_optimized import (
+        GraphNativeBrainMapper,
+        GraphNativeEncoder,
+        GraphNativeBrainModel,
+        GraphNativeTrainer,
+    )
 """
 
-__version__ = '5.0.0'
+__version__ = '5.0.0-graph-native'
 __author__ = 'TwinBrain Team'
 
 # Import main components
@@ -67,6 +78,41 @@ except ImportError as e:
     StratifiedWindowSampler = None
     UncertaintyAwarePredictor = None
 
+# Import graph-native components
+try:
+    from .graph_native_mapper import (
+        GraphNativeBrainMapper,
+        TemporalGraphFeatureExtractor,
+    )
+except ImportError as e:
+    print(f"Warning: Could not import graph_native_mapper: {e}")
+    GraphNativeBrainMapper = None
+    TemporalGraphFeatureExtractor = None
+
+try:
+    from .graph_native_encoder import (
+        GraphNativeEncoder,
+        SpatialTemporalGraphConv,
+        TemporalAttention,
+    )
+except ImportError as e:
+    print(f"Warning: Could not import graph_native_encoder: {e}")
+    GraphNativeEncoder = None
+    SpatialTemporalGraphConv = None
+    TemporalAttention = None
+
+try:
+    from .graph_native_system import (
+        GraphNativeBrainModel,
+        GraphNativeDecoder,
+        GraphNativeTrainer,
+    )
+except ImportError as e:
+    print(f"Warning: Could not import graph_native_system: {e}")
+    GraphNativeBrainModel = None
+    GraphNativeDecoder = None
+    GraphNativeTrainer = None
+
 __all__ = [
     # Adaptive loss balancing
     'AdaptiveLossBalancer',
@@ -85,6 +131,16 @@ __all__ = [
     'TransformerPredictor',
     'StratifiedWindowSampler',
     'UncertaintyAwarePredictor',
+    
+    # Graph-native system (NEW!)
+    'GraphNativeBrainMapper',
+    'TemporalGraphFeatureExtractor',
+    'GraphNativeEncoder',
+    'SpatialTemporalGraphConv',
+    'TemporalAttention',
+    'GraphNativeBrainModel',
+    'GraphNativeDecoder',
+    'GraphNativeTrainer',
 ]
 
 
