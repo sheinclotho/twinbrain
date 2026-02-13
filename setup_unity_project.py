@@ -265,36 +265,19 @@ Unity项目资源文件：
         logger.info(f"  ✓ 默认配置已保存: {config_path.name}")
     
     def generate_unity_scripts(self):
-        """生成增强的Unity C#脚本"""
+        """生成Unity C#脚本"""
         logger.info("\n" + "="*80)
         logger.info("步骤 3: 生成Unity交互脚本")
         logger.info("="*80)
         
-        # 复制基础脚本
-        source_scripts_dir = self.project_root / "unity_examples"
-        base_scripts = [
-            "BrainVisualization.cs",
-            "BrainDataStructures.cs",
-            "BrainConfigLoader.cs",
-            "WebSocketClient.cs",
-            "StimulationInput.cs",
-            "TimelineController.cs"
-        ]
-        
-        for script in base_scripts:
-            src = source_scripts_dir / script
-            if src.exists():
-                dst = self.unity_scripts_dir / script
-                shutil.copy2(src, dst)
-                logger.info(f"  ✓ 复制脚本: {script}")
-            else:
-                logger.warning(f"  ⚠ 脚本未找到: {script}")
-        
-        # Note: Additional helper scripts like DataLoader, AnimationController, 
-        # and ModelInterface can be generated if needed, but the core scripts
-        # (BrainVisualization, StimulationInput, etc.) are now copied from unity_examples
+        # 生成核心脚本
+        self._generate_data_loader_script()
+        self._generate_animation_controller_script()
+        self._generate_stimulation_input_script()
+        self._generate_model_interface_script()
         
         logger.info("  ✓ Unity脚本生成完成")
+        logger.info("  提示: 生成的脚本是基础模板，可根据需要自定义")
     
     def _generate_data_loader_script(self):
         """生成数据加载脚本"""
