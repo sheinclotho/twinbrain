@@ -253,18 +253,19 @@ namespace TwinBrain
                     foreach (string file in index.files)
                     {
                         string filePath = Path.Combine(jsonPath, file);
-                        sequenceFiles.Add(filePath);
                         
-                        // Preload all states for normalization
+                        // Preload state for normalization
                         try
                         {
                             string jsonContent = File.ReadAllText(filePath);
                             BrainStateData state = JsonConvert.DeserializeObject<BrainStateData>(jsonContent);
                             loadedSequence.Add(state);
+                            sequenceFiles.Add(filePath);  // Only add if successfully loaded
                         }
                         catch (System.Exception e)
                         {
                             Debug.LogWarning(string.Format("Failed to preload {0}: {1}", file, e.Message));
+                            // Skip this file - don't add to either list
                         }
                     }
                     
@@ -467,11 +468,15 @@ namespace TwinBrain
         {
             if (loadedSequence == null || loadedSequence.Count == 0)
             {
+                globalMinActivity = 0f;
+                globalMaxActivity = 1f;
+                Debug.LogWarning("No sequence loaded, using default activity range [0, 1]");
                 return;
             }
             
             float minVal = float.MaxValue;
             float maxVal = float.MinValue;
+            int validValueCount = 0;
             
             foreach (BrainStateData state in loadedSequence)
             {
@@ -485,13 +490,24 @@ namespace TwinBrain
                     float activity = GetRegionActivityRaw(region);
                     if (activity < minVal) minVal = activity;
                     if (activity > maxVal) maxVal = activity;
+                    validValueCount++;
                 }
             }
             
-            globalMinActivity = minVal;
-            globalMaxActivity = maxVal;
-            
-            Debug.Log(string.Format("Global activity range: [{0:F3}, {1:F3}]", globalMinActivity, globalMaxActivity));
+            // Handle edge case: no valid data or all values are the same
+            if (validValueCount == 0 || minVal >= maxVal)
+            {
+                globalMinActivity = 0f;
+                globalMaxActivity = 1f;
+                Debug.LogWarning("No valid activity data or uniform values, using default range [0, 1]");
+            }
+            else
+            {
+                globalMinActivity = minVal;
+                globalMaxActivity = maxVal;
+                Debug.Log(string.Format("Global activity range: [{0:F3}, {1:F3}] from {2} values", 
+                    globalMinActivity, globalMaxActivity, validValueCount));
+            }
         }
         
         /// <summary>
@@ -502,7 +518,8 @@ namespace TwinBrain
             if (region.activity == null) return 0f;
             
             // Priority: prediction > fmri > eeg
-            if (region.activity.isPredicted && region.activity.predictionValue > 0)
+            // Note: Include all prediction values, including zero and negative
+            if (region.activity.isPredicted)
             {
                 return region.activity.predictionValue;
             }

@@ -19,8 +19,9 @@ namespace TwinBrain
     /// 1. 在Canvas下创建UI元素（Slider, Button, Text）
     /// 2. 将此脚本添加到Canvas或子对象
     /// 3. 配置UI引用和BrainVisualization引用
+    /// 
+    /// 注意: BrainVisualization组件可以在同一GameObject或其他GameObject上
     /// </summary>
-    [RequireComponent(typeof(BrainVisualization))]
     public class TimelineController : MonoBehaviour
     {
         [Header("UI References")]
@@ -39,6 +40,9 @@ namespace TwinBrain
         [Tooltip("Text on play/pause button")]
         public Text playPauseButtonText;
         
+        [Header("References")]
+        [Tooltip("BrainVisualization component (can be on this or another GameObject)")]
+        public BrainVisualization brainVisualization;
         [Header("Settings")]
         [Tooltip("Update UI every N frames")]
         public int updateInterval = 1;
@@ -49,7 +53,8 @@ namespace TwinBrain
         
         void Start()
         {
-            brainVis = GetComponent<BrainVisualization>();
+            // Get BrainVisualization from assigned reference or same GameObject
+            brainVis = brainVisualization != null ? brainVisualization : GetComponent<BrainVisualization>();
             
             if (brainVis == null)
             {
