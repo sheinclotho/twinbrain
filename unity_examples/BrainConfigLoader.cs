@@ -173,11 +173,8 @@ namespace TwinBrain
                         visualization.highActivityColor = ParseColor(highActivityToken);
                     }
                     
-                    JToken predictedSignalToken = colorsToken["predicted_signal"];
-                    if (predictedSignalToken != null)
-                    {
-                        visualization.predictedColor = ParseColor(predictedSignalToken);
-                    }
+                    // Note: predictedColor removed - using unified color scale for real and predicted data
+                    // See BrainVisualization.GetActivityColor() which handles both cases
                     
                     Debug.Log("Color settings applied");
                 }
