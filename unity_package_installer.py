@@ -58,46 +58,47 @@ class UnityPackageInstaller:
         # TwinBrain源文件路径
         self.source_scripts = self.twinbrain_root / "unity_examples"
         
-    def validate_unity_project(self) -> Tuple[bool, List[str]]:
+    def validate_unity_project(self) -> Tuple[bool, List[str], List[str]]:
         """
         验证Unity项目结构
         
         Returns:
-            (is_valid, issues): 验证结果和问题列表
+            (is_valid, fatal_issues, warnings): 验证结果、致命问题列表和警告列表
         """
         logger.info("验证Unity项目结构...")
         
-        issues = []
+        fatal_issues = []
+        warnings = []
         
         # 检查是否是Unity项目
         if not (self.unity_project / "ProjectSettings").exists():
-            issues.append("不是有效的Unity项目（缺少ProjectSettings目录）")
-            return False, issues
+            fatal_issues.append("不是有效的Unity项目（缺少ProjectSettings目录）")
+            return False, fatal_issues, warnings
         
         # 检查Assets目录
         if not self.assets_dir.exists():
-            issues.append("Assets目录不存在")
-            return False, issues
+            fatal_issues.append("Assets目录不存在")
+            return False, fatal_issues, warnings
         
-        # 检查Packages目录
+        # 检查Packages目录（可选，旧版Unity可能没有）
         if not self.packages_dir.exists():
-            issues.append("Packages目录不存在（这不是严重问题，但可能是旧版Unity）")
+            warnings.append("Packages目录不存在（可能是旧版Unity，将尝试创建）")
         
-        # 检查TwinBrain脚本
+        # 检查TwinBrain脚本（可自动安装）
         if self.scripts_dir.exists():
             script_files = list(self.scripts_dir.glob("*.cs"))
             if len(script_files) > 0:
                 logger.info(f"✓ 找到 {len(script_files)} 个TwinBrain脚本")
             else:
-                issues.append("TwinBrain脚本目录存在但为空")
+                warnings.append("TwinBrain脚本目录存在但为空（将安装脚本）")
         else:
-            issues.append("TwinBrain脚本未安装")
+            warnings.append("TwinBrain脚本未安装（将自动安装）")
         
-        # 检查StreamingAssets
+        # 检查StreamingAssets（可自动创建）
         if not self.streaming_assets.exists():
-            issues.append("StreamingAssets目录不存在（将创建）")
+            warnings.append("StreamingAssets目录不存在（将自动创建）")
         
-        # 检查Newtonsoft.Json包
+        # 检查Newtonsoft.Json包（可自动安装）
         manifest_file = self.packages_dir / "manifest.json"
         if manifest_file.exists():
             try:
@@ -106,20 +107,29 @@ class UnityPackageInstaller:
                     dependencies = manifest.get("dependencies", {})
                     
                     if "com.unity.nuget.newtonsoft-json" not in dependencies:
-                        issues.append("Newtonsoft.Json包未安装（需要手动安装）")
+                        warnings.append("Newtonsoft.Json包未安装（将尝试自动添加到manifest.json）")
                     else:
                         logger.info("✓ Newtonsoft.Json包已安装")
             except Exception as e:
                 logger.warning(f"无法读取packages manifest: {e}")
-        
-        if len(issues) == 0:
-            logger.info("✓ Unity项目验证通过")
-            return True, []
+                warnings.append("无法读取packages manifest（将尝试创建）")
         else:
-            logger.warning(f"发现 {len(issues)} 个问题")
-            for issue in issues:
-                logger.warning(f"  - {issue}")
-            return False, issues
+            warnings.append("packages manifest不存在（将尝试创建）")
+        
+        # 只有致命问题才导致验证失败
+        if len(fatal_issues) == 0:
+            if len(warnings) == 0:
+                logger.info("✓ Unity项目验证通过，无需修复")
+            else:
+                logger.info(f"✓ Unity项目基本有效，发现 {len(warnings)} 个可修复的问题")
+                for warning in warnings:
+                    logger.info(f"  ⚠ {warning}")
+            return True, [], warnings
+        else:
+            logger.error(f"✗ Unity项目验证失败，发现 {len(fatal_issues)} 个致命问题")
+            for issue in fatal_issues:
+                logger.error(f"  ✗ {issue}")
+            return False, fatal_issues, warnings
     
     def install_scripts(self) -> bool:
         """
@@ -263,6 +273,52 @@ class UnityPackageInstaller:
         
         return True
     
+    def install_newtonsoft_json(self) -> bool:
+        """
+        自动添加Newtonsoft.Json包到Unity项目
+        
+        Returns:
+            是否成功
+        """
+        logger.info("安装Newtonsoft.Json依赖...")
+        
+        # 确保Packages目录存在
+        self.packages_dir.mkdir(parents=True, exist_ok=True)
+        
+        manifest_file = self.packages_dir / "manifest.json"
+        
+        # 创建或更新manifest.json
+        manifest = {}
+        if manifest_file.exists():
+            try:
+                with open(manifest_file, 'r', encoding='utf-8') as f:
+                    manifest = json.load(f)
+            except Exception as e:
+                logger.warning(f"无法读取现有manifest.json: {e}，将创建新的")
+        
+        # 确保dependencies字段存在
+        if "dependencies" not in manifest:
+            manifest["dependencies"] = {}
+        
+        # 添加Newtonsoft.Json包
+        newtonsoft_package = "com.unity.nuget.newtonsoft-json"
+        if newtonsoft_package not in manifest["dependencies"]:
+            manifest["dependencies"][newtonsoft_package] = "3.2.1"
+            logger.info(f"  ✓ 添加 {newtonsoft_package} 到 manifest.json")
+        else:
+            logger.info(f"  ✓ {newtonsoft_package} 已存在于 manifest.json")
+        
+        # 写入manifest.json
+        try:
+            with open(manifest_file, 'w', encoding='utf-8') as f:
+                json.dump(manifest, f, indent=2)
+            logger.info("✓ manifest.json 更新成功")
+            logger.info("  注意：Unity将在下次打开项目时自动下载包")
+            return True
+        except Exception as e:
+            logger.error(f"更新manifest.json失败: {e}")
+            return False
+    
     def create_package_json(self) -> bool:
         """
         创建UPM包定义（用于未来支持）
@@ -288,7 +344,7 @@ class UnityPackageInstaller:
                 "name": "TwinBrain Team"
             },
             "dependencies": {
-                "com.unity.nuget.newtonsoft-json": "3.0.2"
+                "com.unity.nuget.newtonsoft-json": "3.2.1"
             }
         }
         
@@ -317,60 +373,132 @@ class UnityPackageInstaller:
         
         guide_content = """# TwinBrain Unity 使用指南
 
-## 快速开始
+## ✅ 自动化安装完成的内容
 
-### 1. 检查依赖
+安装程序已经自动完成以下配置：
 
-确保已安装 Newtonsoft.Json:
-1. Window > Package Manager
-2. "+" > "Add package from git URL"
-3. 输入: `com.unity.nuget.newtonsoft-json`
+1. **✅ C#脚本安装** - 所有TwinBrain脚本已复制到 `Assets/TwinBrain/Scripts/`
+2. **✅ 目录结构创建** - StreamingAssets和必要的子目录已创建
+3. **✅ Assembly Definition** - TwinBrain.Scripts.asmdef已生成
+4. **✅ 依赖包配置** - Newtonsoft.Json已添加到manifest.json（Unity将自动下载）
+5. **✅ 配置文件** - package.json和相关配置已生成
 
-### 2. 创建场景
+## 🔧 需要手动完成的步骤
 
-1. 创建空GameObject，命名为 "BrainManager"
-2. 添加组件:
-   - `BrainVisualization` (主可视化)
-   - `WebSocketClientImproved` (通信，可选)
-   - `BrainConfigLoader` (配置加载)
+### 步骤1: 打开Unity项目并等待包下载
 
-### 3. 配置组件
+1. 在Unity Hub中打开项目
+2. Unity会自动检测manifest.json的更改并下载Newtonsoft.Json包
+3. 等待进度条完成（通常1-2分钟）
+4. 如果出现编译错误，请检查Console并确认Newtonsoft.Json已安装
 
-**BrainVisualization:**
-- Json Path: `StreamingAssets/brain_states`
-- Region Prefab: 脑区预制体（Sphere或OBJ模型）
+**验证安装**：
+- Window > Package Manager
+- 搜索 "Newtonsoft"
+- 应该看到 "Newtonsoft Json" 包已安装
 
-**WebSocketClientImproved:**
-- Server URL: `http://localhost:8765`
-- Auto Connect: ✓
+### 步骤2: 创建场景对象
 
-### 4. 准备数据
+在Unity场景中手动创建以下对象：
 
-将JSON状态文件放入 `Assets/StreamingAssets/brain_states/`
+**A. 创建BrainManager GameObject：**
+1. `Hierarchy` > 右键 > `Create Empty`
+2. 命名为 `BrainManager`
+3. 添加以下组件（点击 Add Component 并搜索）：
 
-### 5. 运行
+   **组件1: BrainVisualization** (主可视化组件)
+   - Json Path: `brain_states` (相对于StreamingAssets)
+   - Region Prefab: [需要创建，见下方]
+   - Load Sequence: ✓ (如果有多个JSON文件)
+   
+   **组件2: WebSocketClientImproved** (可选，用于实时通信)
+   - Server URL: `http://localhost:8765`
+   - Auto Connect: ✓
+   - Auto Reconnect: ✓
+   
+   **组件3: BrainConfigLoader** (可选，用于配置加载)
+   - Config Path: `config/unity_config.json`
 
-按Play键启动可视化！
+### 步骤3: 创建脑区可视化预制体
 
-## 进阶功能
+你需要创建一个预制体来表示脑区。有两种方式：
 
-### Cache自动转换
+**方式A: 使用简单球体（推荐入门）**
+1. `Hierarchy` > `3D Object` > `Sphere`
+2. 设置Transform Scale: (0.5, 0.5, 0.5)
+3. 添加Material（可选）
+4. 拖拽到Project窗口创建Prefab，命名 `BrainRegion`
+5. 将此Prefab拖入BrainVisualization的 `Region Prefab` 字段
+6. 删除场景中的Sphere（保留Prefab即可）
 
-1. 创建UI Canvas和Button
-2. 添加 `CacheToJsonConverter` 组件
-3. 连接UI元素
-4. 点击按钮自动转换cache文件
+**方式B: 使用OBJ模型（如果有FreeSurfer数据）**
+1. 将OBJ文件导入Unity (Assets > Import New Asset)
+2. 拖拽OBJ到场景调整大小和材质
+3. 创建Prefab
+4. 赋值给BrainVisualization的 `Region Prefab`
 
-### 实时通信
+### 步骤4: 准备数据文件（可选UI转换）
 
-确保后端服务器运行:
+你需要将大脑状态JSON文件放入StreamingAssets目录。有两种方式：
+
+**方式A: 从Cache自动转换（推荐）**
+
+如果你已经有预处理的cache文件(.pt格式)：
+
+1. **创建转换UI（仅需一次）：**
+   - `Hierarchy` > `UI` > `Canvas`
+   - 右键Canvas > `UI` > `Button`，命名 "ConvertButton"，文本改为 "转换Cache"
+   - 右键Canvas > `UI` > `Text`，命名 "StatusText"
+   
+2. **添加转换器组件：**
+   - 选中Canvas
+   - `Add Component` > `Cache To Json Converter`
+   - 配置：
+     - Convert Button: 拖入ConvertButton
+     - Status Text: 拖入StatusText
+     - Backend Url: `http://localhost:8765`
+
+3. **使用转换功能：**
+   ```bash
+   # 先启动后端服务器
+   python unity_startup.py --demo
+   ```
+   - 在Unity中点击Play
+   - 点击 "转换Cache" 按钮
+   - 等待转换完成
+
+**方式B: 手动复制JSON文件**
+
+如果已经有JSON文件：
 ```bash
-python unity_startup.py --model results/model.pt
+cp your_data/*.json UnityProject/Assets/StreamingAssets/brain_states/
 ```
 
-然后在Unity中:
+### 步骤5: 运行场景
+
+1. 确保以上所有步骤完成
+2. 在Unity中打开场景
+3. 点击 **Play** 按钮
+4. 应该看到脑区出现并根据数据显示活动
+
+## 🎮 可选功能
+
+### 实时后端通信
+
+如果要使用实时预测功能：
+
+```bash
+# 启动后端服务器（需要训练好的模型）
+python unity_startup.py --model results/hetero_gnn_trained.pt
+
+# 或使用演示模式
+python unity_startup.py --demo
+```
+
+然后在Unity中通过WebSocketClientImproved组件使用：
+
 ```csharp
-// 获取WebSocket客户端
+// 获取组件
 var wsClient = GetComponent<WebSocketClientImproved>();
 
 // 请求预测
@@ -385,30 +513,68 @@ wsClient.SimulateStimulation(regions, 0.5f, "sine", (response) => {
 });
 ```
 
-## 故障排除
+## ❓ 故障排除
 
-### 找不到Newtonsoft.Json
+### Q: 找不到Newtonsoft.Json类型
 
-确保已通过Package Manager安装，或手动添加DLL。
+**A:** 
+1. 确认Package Manager中已安装（Window > Package Manager）
+2. 如果没有，手动添加：
+   - Package Manager > + > Add package from git URL
+   - 输入: `com.unity.nuget.newtonsoft-json`
+3. 重启Unity编辑器
 
-### WebSocket连接失败
+### Q: WebSocket连接失败
 
-1. 检查后端服务器是否运行
-2. 确认URL和端口正确
-3. 查看Unity Console的错误信息
+**A:** 检查：
+1. 后端服务器是否运行: `python unity_startup.py --demo`
+2. 端口是否正确（默认8765）
+3. 防火墙设置
+4. Unity Console中的错误信息
 
-### JSON文件加载失败
+### Q: JSON文件加载失败
 
-1. 确认文件在StreamingAssets目录
-2. 检查文件格式是否正确
-3. 查看日志中的具体错误
+**A:** 确认：
+1. 文件在 `StreamingAssets/brain_states/` 目录
+2. 文件格式正确（JSON格式）
+3. BrainVisualization的Json Path设置正确（应为相对路径，如 `brain_states`）
+4. 查看Unity Console的具体错误
 
-## 更多帮助
+### Q: 场景中看不到脑区
 
-查看完整文档:
-- Unity一键使用指南.md
-- Unity架构说明.md
-- GitHub Issues: https://github.com/sheinclotho/twinbrain/issues
+**A:** 检查：
+1. BrainManager GameObject是否激活
+2. BrainVisualization组件是否启用
+3. Region Prefab是否已赋值
+4. JSON数据是否加载成功（查看Console）
+5. Camera位置和方向（可能脑区在视野外）
+
+## 📚 更多帮助
+
+- **完整文档**: 查看项目中的 `Unity一键使用指南.md`
+- **架构说明**: 查看 `Unity架构说明.md`
+- **GitHub Issues**: https://github.com/sheinclotho/twinbrain/issues
+
+## 🎯 总结
+
+**完全自动化的部分：**
+- ✅ 脚本安装
+- ✅ 目录创建
+- ✅ 依赖配置
+- ✅ Assembly Definition
+
+**需要手动的部分（无法自动化）：**
+- 🔧 在场景中创建GameObject和添加组件
+- 🔧 创建和配置预制体
+- 🔧 配置组件参数
+- 🔧 创建UI元素（可选）
+
+这是Unity编辑器的限制，脚本无法自动创建场景对象。这些手动步骤只需完成一次，之后可以保存为模板场景重复使用。
+
+---
+
+**安装版本**: 2.5  
+**更新日期**: 2024-02-14
 """
         
         guide_file = self.assets_dir / "TwinBrain" / "USAGE_GUIDE.md"
@@ -437,37 +603,66 @@ wsClient.SimulateStimulation(regions, 0.5f, "sine", (response) => {
         logger.info("="*80)
         
         # 1. 验证Unity项目
-        is_valid, issues = self.validate_unity_project()
+        is_valid, fatal_issues, warnings = self.validate_unity_project()
         if not is_valid:
-            logger.error("Unity项目验证失败，无法继续安装")
+            logger.error("Unity项目验证失败，存在无法自动修复的致命问题：")
+            for issue in fatal_issues:
+                logger.error(f"  ✗ {issue}")
+            logger.error("请先修复以上问题后再运行安装程序")
             return False
+        
+        # 如果有警告，显示将要执行的修复
+        if warnings:
+            logger.info("\n将自动修复以下问题：")
+            for warning in warnings:
+                logger.info(f"  → {warning}")
+            logger.info("")
         
         # 2. 安装脚本
         if not self.install_scripts():
             logger.error("脚本安装失败")
             return False
         
-        # 3. 创建Assembly Definition
+        # 3. 安装Newtonsoft.Json依赖
+        self.install_newtonsoft_json()
+        
+        # 4. 创建Assembly Definition
         self.create_assembly_definition()
         
-        # 4. 设置StreamingAssets
+        # 5. 设置StreamingAssets
         self.setup_streaming_assets(unity_project_data)
         
-        # 5. 创建Package定义
+        # 6. 创建Package定义
         self.create_package_json()
         
-        # 6. 生成使用指南
+        # 7. 生成使用指南
         self.generate_usage_guide()
         
         logger.info("="*80)
-        logger.info("✓ 安装完成！")
+        logger.info("✓ 自动安装完成！")
         logger.info("="*80)
-        logger.info("\n后续步骤:")
+        logger.info("\n后续步骤：")
+        logger.info("")
         logger.info("1. 在Unity中打开项目")
-        logger.info("2. 确保安装 Newtonsoft.Json (Window > Package Manager)")
-        logger.info("3. 查看 Assets/TwinBrain/USAGE_GUIDE.md 了解使用方法")
-        logger.info("4. 准备数据文件到 Assets/StreamingAssets/brain_states/")
-        logger.info("\n")
+        logger.info("   - Unity会自动下载Newtonsoft.Json包（需要1-2分钟）")
+        logger.info("   - 等待进度条完成")
+        logger.info("")
+        logger.info("2. 手动创建场景对象（由于Unity编辑器限制，无法自动化）：")
+        logger.info("   a. 创建空GameObject，命名为 'BrainManager'")
+        logger.info("   b. 添加组件：BrainVisualization, WebSocketClientImproved, BrainConfigLoader")
+        logger.info("   c. 创建脑区预制体（Sphere或OBJ模型）")
+        logger.info("   d. 配置组件参数")
+        logger.info("")
+        logger.info("3. 准备数据文件")
+        logger.info("   - 将JSON文件复制到 Assets/StreamingAssets/brain_states/")
+        logger.info("   - 或使用Cache转换功能（需创建UI）")
+        logger.info("")
+        logger.info("4. 查看详细使用说明")
+        logger.info("   - Assets/TwinBrain/USAGE_GUIDE.md（Unity项目内）")
+        logger.info("   - Unity一键使用指南.md（TwinBrain仓库）")
+        logger.info("")
+        logger.info("提示：手动步骤只需完成一次，之后可保存为场景模板重复使用")
+        logger.info("")
         
         return True
 
@@ -530,14 +725,21 @@ def main():
     installer = UnityPackageInstaller(unity_project, twinbrain_root)
     
     # 验证项目
-    is_valid, issues = installer.validate_unity_project()
+    is_valid, fatal_issues, warnings = installer.validate_unity_project()
     
     if args.validate_only:
         if is_valid:
             logger.info("\n✓ Unity项目验证通过")
+            if warnings:
+                logger.info("\n发现以下可修复的问题（运行安装程序将自动修复）：")
+                for warning in warnings:
+                    logger.info(f"  ⚠ {warning}")
             return 0
         else:
             logger.error("\n✗ Unity项目验证失败")
+            logger.error("致命问题：")
+            for issue in fatal_issues:
+                logger.error(f"  ✗ {issue}")
             return 1
     
     # 执行安装

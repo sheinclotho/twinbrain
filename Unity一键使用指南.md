@@ -16,6 +16,31 @@ TwinBrain Unity集成提供大脑活动的3D可视化功能，支持实时预测
 - FreeSurfer表面数据（用于生成真实3D脑区模型）
 - 训练好的模型文件（用于实时预测）
 
+## ⚙️ 自动化程度说明
+
+### ✅ 完全自动化（无需手动操作）
+
+安装程序（`unity_package_installer.py`）会自动完成：
+- ✅ 安装所有C#脚本到Unity项目
+- ✅ 创建目录结构（StreamingAssets等）
+- ✅ 配置Newtonsoft.Json依赖（Unity会自动下载）
+- ✅ 生成Assembly Definition文件
+- ✅ 创建Package定义和配置文件
+- ✅ 生成使用指南文档
+
+### 🔧 需要手动操作（Unity编辑器限制）
+
+由于Unity编辑器的限制，以下步骤**无法**通过脚本自动化，需要在Unity编辑器中手动完成：
+- 🔧 在场景中创建GameObject（如BrainManager）
+- 🔧 为GameObject添加组件（如BrainVisualization）
+- 🔧 创建预制体（Prefab）
+- 🔧 配置组件参数
+- 🔧 创建UI元素（可选）
+
+**好消息**：这些手动步骤只需完成一次，之后可以保存为场景模板重复使用！
+
+详细的手动步骤说明请查看安装后生成的 `Assets/TwinBrain/USAGE_GUIDE.md`
+
 ## 🚀 快速开始（3步完成）
 
 ### 方式A: 使用自动安装工具（推荐）⭐⭐⭐
@@ -33,8 +58,17 @@ cd twinbrain
 # 3. 自动安装TwinBrain到Unity项目
 python unity_package_installer.py --unity-project /path/to/TwinBrain_Demo
 
-# 完成！现在可以在Unity中打开项目
+# 完成！安装程序会自动：
+# ✅ 安装所有C#脚本
+# ✅ 创建目录结构
+# ✅ 配置Newtonsoft.Json依赖
+# ✅ 生成使用指南
 ```
+
+**⚠️ 注意**：由于Unity编辑器限制，以下步骤仍需手动完成（安装后查看USAGE_GUIDE.md获取详细说明）：
+- 在场景中创建GameObject并添加组件
+- 创建脚区预制体
+- 配置组件参数
 
 ### 方式B: 手动设置
 
@@ -81,18 +115,31 @@ python unity_package_installer.py --unity-project /path/to/UnityProject \
 python unity_package_installer.py --unity-project /path/to/UnityProject --validate-only
 ```
 
-**安装内容**:
+**自动安装的内容**:
 - ✅ 所有C#脚本 → `Assets/TwinBrain/Scripts/`
 - ✅ Assembly Definition文件
 - ✅ StreamingAssets目录结构
-- ✅ 配置文件
+- ✅ Newtonsoft.Json依赖配置
+- ✅ Package定义文件
 - ✅ 使用指南文档
 
 ### 阶段2: 配置Unity项目
 
-#### 2.1 安装依赖包
+#### 2.1 依赖包自动下载
 
-在Unity中：
+**✅ 自动完成**：安装程序已将Newtonsoft.Json添加到manifest.json
+
+在Unity中打开项目时：
+1. Unity会自动检测依赖变化
+2. 自动下载Newtonsoft.Json包（需要1-2分钟）
+3. 等待进度条完成
+
+**验证安装**（可选）：
+- `Window` > `Package Manager`
+- 搜索 "Newtonsoft"
+- 应该看到已安装
+
+**如果自动下载失败**，手动安装：
 1. `Window` > `Package Manager`
 2. 点击 `+` > `Add package from git URL`
 3. 输入: `com.unity.nuget.newtonsoft-json`
