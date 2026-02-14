@@ -236,9 +236,13 @@ class BrainVisualizationServer:
         n_steps = request.get("n_steps", 10)
         
         # Input validation
+        original_n_steps = n_steps
         if not isinstance(n_steps, int) or n_steps <= 0 or n_steps > 1000:
             self.logger.warning(f"Invalid n_steps: {n_steps}, using default 10")
             n_steps = 10
+        
+        # Inform client if parameter was adjusted
+        parameter_adjusted = (n_steps != original_n_steps)
         
         try:
             # Use ModelServer if available
@@ -254,7 +258,9 @@ class BrainVisualizationServer:
                     "success": True,
                     "n_steps": n_steps,
                     "predictions": predictions,
-                    "saved_to": str(self.model_server.output_dir)
+                    "saved_to": str(self.model_server.output_dir),
+                    "parameter_adjusted": parameter_adjusted,
+                    "warning": "n_steps was adjusted to valid range" if parameter_adjusted else None
                 }
             
             # Fallback to simple prediction generation
@@ -288,7 +294,9 @@ class BrainVisualizationServer:
                 "type": "prediction",
                 "success": True,
                 "n_steps": n_steps,
-                "predictions": predictions
+                "predictions": predictions,
+                "parameter_adjusted": parameter_adjusted,
+                "warning": "n_steps was adjusted to valid range" if parameter_adjusted else None
             }
             
         except Exception as e:

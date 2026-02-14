@@ -19,6 +19,53 @@ PORT = 8765       # 默认端口
 TIMEOUT = 30      # 请求超时（秒）
 ```
 
+### 安全考虑
+
+**端口配置**:
+- 默认端口8765可能需要在防火墙中开放
+- 生产环境建议修改为标准HTTP端口（80/443）或非标准端口
+
+**绑定地址**:
+- `0.0.0.0`: 监听所有网络接口（包括外网）
+  - ⚠️ 仅在受信任网络中使用
+  - 适用于多机器测试
+- `127.0.0.1`/`localhost`: 仅本地连接
+  - ✅ 推荐用于开发和单机使用
+  - 更安全，防止外部访问
+
+**推荐配置**:
+```bash
+# 开发环境（安全）
+python unity_startup.py --host 127.0.0.1 --port 8765
+
+# 局域网测试（注意安全）
+python unity_startup.py --host 0.0.0.0 --port 8765
+
+# 生产环境（使用反向代理）
+python unity_startup.py --host 127.0.0.1 --port 8765
+# 然后配置Nginx/Apache作为反向代理，添加HTTPS和认证
+```
+
+**防火墙规则**:
+```bash
+# Linux (iptables)
+sudo iptables -A INPUT -p tcp --dport 8765 -j ACCEPT
+
+# Windows (PowerShell)
+New-NetFirewallRule -DisplayName "TwinBrain" -Direction Inbound -LocalPort 8765 -Protocol TCP -Action Allow
+
+# macOS (pfctl)
+# 编辑 /etc/pf.conf，添加:
+# pass in proto tcp from any to any port 8765
+```
+
+**其他安全建议**:
+- 不要在公网直接暴露此服务
+- 使用VPN或SSH隧道进行远程访问
+- 考虑添加认证机制（Token, API Key）
+- 定期更新依赖包以修复安全漏洞
+- 监控异常请求模式
+
 ### 启动服务器
 
 ```bash
@@ -535,6 +582,20 @@ delay = min(initial_delay * (multiplier ^ attempt), max_delay)
 ---
 
 ## 数据模型
+
+### 配置常量
+
+```csharp
+// 在WebSocketClientImproved.cs中定义
+private const int MAX_REGION_ID = 199;  // 最大脑区ID (0-199 = 200个脑区)
+```
+
+```python
+# 在realtime_server.py中定义
+MAX_REGIONS = 200  # 脑区总数
+```
+
+**说明**: 默认支持200个脑区（Schaefer200图谱）。如需支持其他图谱（如AAL 116, Destrieux 148等），需要修改这些常量。
 
 ### BrainStateData
 

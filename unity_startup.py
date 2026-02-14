@@ -305,14 +305,16 @@ def main():
         logger.warning("⚠ 未指定模型文件，尝试查找默认模型...")
         
         # Search for models in common locations
+        # Limit to first 5 results directories to avoid excessive filesystem
+        # traversal in large projects with many subdirectories
         search_paths = [
             project_root / "results" / "hetero_gnn_trained.pt",
             project_root / "test_file3" / "sub-01" / "results" / "hetero_gnn_trained.pt",
         ]
         
-        # Also search in subdirectories
+        # Also search in subdirectories (limited to first 5 to prevent performance issues)
         results_dirs = list(project_root.glob("**/results"))
-        for results_dir in results_dirs[:5]:  # Limit search
+        for results_dir in results_dirs[:5]:
             search_paths.append(results_dir / "hetero_gnn_trained.pt")
             search_paths.append(results_dir / "best_model.pt")
         

@@ -14,8 +14,20 @@ namespace TwinBrain
     /// 
     /// 连接到TwinBrain WebSocket服务器以获取实时大脑状态更新。
     /// 
+    /// **重要说明**:
+    /// 虽然命名为"WebSocket"客户端，但此实现使用HTTP/REST通信而非真正的WebSocket协议。
+    /// 这是因为Unity原生不支持WebSocket，使用HTTP可以：
+    /// - 兼容所有Unity平台（包括WebGL）
+    /// - 无需第三方插件
+    /// - 简化部署和配置
+    /// 
+    /// 如需真正的WebSocket支持（双向实时通信），请考虑：
+    /// - WebSocketSharp插件（独立平台）
+    /// - NativeWebSocket插件（多平台）
+    /// - 浏览器原生WebSocket API（仅WebGL）
+    /// 
     /// 改进内容:
-    /// - 使用UnityWebRequest实现真正的HTTP通信（WebGL兼容）
+    /// - 使用UnityWebRequest实现完整的HTTP通信
     /// - 添加指数退避重连机制
     /// - 完善的错误处理和日志记录
     /// - 请求ID追踪，匹配异步响应
@@ -30,20 +42,15 @@ namespace TwinBrain
     /// - Cache文件转换
     /// 
     /// 使用方法:
-    /// 1. 启动TwinBrain WebSocket服务器: python unity_startup.py
+    /// 1. 启动TwinBrain服务器: python unity_startup.py
     /// 2. 将此脚本附加到GameObject
     /// 3. 配置服务器URL（默认: http://localhost:8765）
     /// 4. 脚本将在启动时自动连接
-    /// 
-    /// 注意: 
-    /// - 此版本使用HTTP POST作为通信方式（WebGL兼容）
-    /// - 对于真正的WebSocket，需要使用原生WebSocket插件
-    /// - 支持请求-响应模式，不支持服务器推送
     /// </summary>
     public class WebSocketClientImproved : MonoBehaviour
     {
         [Header("连接设置")]
-        [Tooltip("后端服务器URL (HTTP)")]
+        [Tooltip("后端服务器URL (使用HTTP协议，非真正的WebSocket)")]
         public string serverUrl = "http://localhost:8765";
         
         [Tooltip("启动时自动连接")]
@@ -100,7 +107,8 @@ namespace TwinBrain
         public event BrainStateReceivedHandler OnBrainStateReceived;
         public event MessageReceivedHandler OnMessageReceived;
         
-        // 私有变量
+        // 配置常量
+        private const int MAX_REGION_ID = 199;  // 最大脑区ID (0-199 = 200个脑区)
         private Queue<string> messageQueue = new Queue<string>();
         private Dictionary<string, Action<JObject>> pendingRequests = new Dictionary<string, Action<JObject>>();
         private Coroutine healthCheckCoroutine = null;
@@ -528,13 +536,13 @@ namespace TwinBrain
             List<int> validRegions = new List<int>();
             foreach (int region in targetRegions)
             {
-                if (region >= 0 && region < 200)
+                if (region >= 0 && region <= MAX_REGION_ID)
                 {
                     validRegions.Add(region);
                 }
                 else
                 {
-                    Debug.LogWarning($"[WebSocket] 忽略无效脑区ID: {region}（有效范围: 0-199）");
+                    Debug.LogWarning($"[WebSocket] 忽略无效脑区ID: {region}（有效范围: 0-{MAX_REGION_ID}）");
                 }
             }
             
