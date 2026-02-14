@@ -61,7 +61,7 @@ python setup_unity_project.py --freesurfer-dir /path/to/freesurfer/files
 unity_project/
 ├── freesurfer_files/         # FreeSurfer数据存放位置
 ├── brain_data/
-│   ├── cache/                # 预处理缓存文件(.pkl/.npy)
+│   ├── cache/                # 预处理缓存文件(.pt PyTorch格式)
 │   ├── model_output/         # JSON状态文件（Unity读取）
 │   └── original/             # 原始数据
 ├── Unity_Assets/
@@ -405,10 +405,12 @@ Window > Package Manager > + > Add package from git URL
 2. 在BrainVisualization中Use Obj Models设为false
 3. 使用Region Prefab字段
 
-### Q: Cache转换失败
+### Q: Cache文件转换失败
 
 **A:** 检查：
-1. Cache文件格式（.pkl, .npy, .pt等）
+1. Cache文件格式（.pt, .pth PyTorch格式）
+   - 正确格式：`eeg_data.pt`, `hetero_graphs.pt`
+   - 这些是训练过程自动生成的缓存文件
 2. 后端服务器正在运行
 3. 文件权限
 4. 查看Unity Console和Python日志

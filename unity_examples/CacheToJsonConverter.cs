@@ -129,14 +129,14 @@ namespace TwinBrain
                 yield break;
             }
             
-            // 查找cache文件
+            // 查找cache文件（仅.pt/.pth格式，这是实际的PyTorch缓存格式）
             string[] cacheFiles = Directory.GetFiles(cachePath, "*.*");
             List<string> validCacheFiles = new List<string>();
             
             foreach (string file in cacheFiles)
             {
                 string ext = Path.GetExtension(file).ToLower();
-                if (ext == ".pkl" || ext == ".npy" || ext == ".npz" || ext == ".pt" || ext == ".pth")
+                if (ext == ".pt" || ext == ".pth")
                 {
                     validCacheFiles.Add(file);
                 }
@@ -144,7 +144,7 @@ namespace TwinBrain
             
             if (validCacheFiles.Count == 0)
             {
-                UpdateStatus("警告: 未找到cache文件 (.pkl, .npy, .pt等)", Color.yellow);
+                UpdateStatus("警告: 未找到cache文件 (.pt, .pth)", Color.yellow);
                 yield return new WaitForSeconds(2f);
                 FinishConversion();
                 yield break;

@@ -407,9 +407,11 @@ wsClient.StopStream((response) => {
 - `output_dir`: 字符串，目标目录（会自动创建）
 
 **支持的文件格式**:
-- `.pkl` (Pickle)
-- `.npy`, `.npz` (NumPy)
-- `.pt`, `.pth` (PyTorch)
+- `.pt`, `.pth` (PyTorch - 这是实际的缓存格式)
+
+**注意**: 缓存文件由训练过程自动生成，通常命名为：
+- `eeg_data.pt` - EEG数据缓存
+- `hetero_graphs.pt` - 异构图数据缓存
 
 **成功响应**:
 ```json
@@ -431,8 +433,7 @@ wsClient.StopStream((response) => {
   "success": true,
   "converted_count": 3,
   "errors": [
-    "Error processing file1.pkl: Invalid format",
-    "Error processing file2.npy: Corrupted data"
+    "Error processing unknown_file.pt: Unsupported cache format"
   ],
   "output_dir": "/path/to/output"
 }
