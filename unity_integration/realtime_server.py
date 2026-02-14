@@ -10,6 +10,7 @@ import json
 import logging
 from typing import Dict, Any, Set, Optional
 from pathlib import Path
+from datetime import datetime
 
 # Try to import websockets, but make it optional
 try:
@@ -156,6 +157,9 @@ class BrainVisualizationServer:
         
         elif request_type == "stream_stop":
             return {"type": "stream_stopped", "success": True}
+        
+        elif request_type == "convert_cache":
+            return await self.handle_convert_cache(request)
         
         else:
             return {
@@ -413,6 +417,142 @@ class BrainVisualizationServer:
             return {
                 "type": "error",
                 "message": f"Simulation failed: {str(e)}"
+            }
+    
+    async def handle_convert_cache(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle cache to JSON conversion request.
+        
+        Request format:
+        {
+            "type": "convert_cache",
+            "cache_dir": "/path/to/cache",
+            "output_dir": "/path/to/output"
+        }
+        """
+        try:
+            cache_dir = request.get("cache_dir")
+            output_dir = request.get("output_dir")
+            
+            if not cache_dir or not output_dir:
+                return {
+                    "type": "error",
+                    "message": "cache_dir and output_dir are required"
+                }
+            
+            cache_path = Path(cache_dir)
+            output_path = Path(output_dir)
+            
+            if not cache_path.exists():
+                return {
+                    "type": "error",
+                    "message": f"Cache directory does not exist: {cache_dir}"
+                }
+            
+            # Create output directory if it doesn't exist
+            output_path.mkdir(parents=True, exist_ok=True)
+            
+            # Find cache files
+            import glob
+            cache_files = []
+            for ext in ['*.pkl', '*.npy', '*.npz', '*.pt', '*.pth']:
+                cache_files.extend(glob.glob(str(cache_path / ext)))
+            
+            if not cache_files:
+                return {
+                    "type": "error",
+                    "message": f"No cache files found in {cache_dir}"
+                }
+            
+            self.logger.info(f"Found {len(cache_files)} cache files to convert")
+            
+            # Process each cache file
+            converted_count = 0
+            errors = []
+            
+            for cache_file in cache_files:
+                try:
+                    # Load cache file
+                    import torch
+                    import numpy as np
+                    import pickle
+                    
+                    file_path = Path(cache_file)
+                    ext = file_path.suffix
+                    
+                    if ext == '.pkl':
+                        with open(file_path, 'rb') as f:
+                            data = pickle.load(f)
+                    elif ext in ['.npy', '.npz']:
+                        data = np.load(file_path, allow_pickle=True)
+                        if isinstance(data, np.lib.npyio.NpzFile):
+                            data = dict(data)
+                    elif ext in ['.pt', '.pth']:
+                        data = torch.load(file_path, map_location='cpu')
+                    else:
+                        continue
+                    
+                    # Convert to brain state JSON
+                    if self.exporter:
+                        # Extract fMRI/EEG data
+                        brain_activity = {}
+                        if isinstance(data, dict):
+                            if 'fmri' in data:
+                                brain_activity['fmri'] = torch.tensor(data['fmri']) if not isinstance(data['fmri'], torch.Tensor) else data['fmri']
+                            if 'eeg' in data:
+                                brain_activity['eeg'] = torch.tensor(data['eeg']) if not isinstance(data['eeg'], torch.Tensor) else data['eeg']
+                        
+                        if brain_activity:
+                            # Generate JSON output
+                            output_file = output_path / f"brain_state_{file_path.stem}.json"
+                            self.exporter.export_brain_state(
+                                brain_activity=brain_activity,
+                                output_path=output_file
+                            )
+                            converted_count += 1
+                            self.logger.info(f"Converted: {file_path.name} -> {output_file.name}")
+                    else:
+                        # Fallback: simple JSON export
+                        output_file = output_path / f"brain_state_{file_path.stem}.json"
+                        # Create minimal JSON structure
+                        simple_json = {
+                            "version": "2.0",
+                            "timestamp": datetime.now().isoformat(),
+                            "source_file": file_path.name,
+                            "note": "Converted from cache without exporter"
+                        }
+                        with open(output_file, 'w') as f:
+                            json.dump(simple_json, f, indent=2)
+                        converted_count += 1
+                        
+                except Exception as e:
+                    error_msg = f"Error processing {cache_file}: {str(e)}"
+                    self.logger.error(error_msg)
+                    errors.append(error_msg)
+            
+            if converted_count > 0:
+                return {
+                    "type": "convert_cache_response",
+                    "success": True,
+                    "message": f"Successfully converted {converted_count} cache files",
+                    "converted_count": converted_count,
+                    "errors": errors if errors else None,
+                    "output_dir": str(output_path)
+                }
+            else:
+                return {
+                    "type": "error",
+                    "success": False,
+                    "message": "No files were converted",
+                    "errors": errors
+                }
+                
+        except Exception as e:
+            self.logger.error(f"Error in handle_convert_cache: {e}")
+            return {
+                "type": "error",
+                "success": False,
+                "message": str(e)
             }
     
     async def handle_stream_start(self, request: Dict[str, Any]) -> Dict[str, Any]:

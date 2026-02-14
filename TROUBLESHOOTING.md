@@ -248,7 +248,8 @@ TwinBrain.BrainConfigLoader.LoadConfiguration
 1. **使用最新版本的脚本**：
 ```bash
 git pull origin main
-# 或重新复制 unity_examples/ 中的最新脚本
+# 或重新运行 setup_unity_project.py 生成最新脚本
+python setup_unity_project.py --auto-setup
 ```
 
 2. **更新配置文件**：

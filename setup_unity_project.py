@@ -265,36 +265,48 @@ Unity项目资源文件：
         logger.info(f"  ✓ 默认配置已保存: {config_path.name}")
     
     def generate_unity_scripts(self):
-        """生成增强的Unity C#脚本"""
+        """
+        复制Unity C#脚本到项目
+        
+        从 unity_examples/ 复制所有功能完整的Unity C#脚本：
+        - WebSocketClient.cs: WebSocket客户端（前后端通信）
+        - BrainDataStructures.cs: 数据结构定义
+        - BrainConfigLoader.cs: 配置加载器
+        - BrainVisualization.cs: 可视化控制器
+        - StimulationInput.cs: 刺激输入UI
+        - TimelineController.cs: 时间轴控制
+        - CacheToJsonConverter.cs: Cache文件自动转换为JSON
+        """
         logger.info("\n" + "="*80)
-        logger.info("步骤 3: 生成Unity交互脚本")
+        logger.info("步骤 3: 复制Unity C#脚本")
         logger.info("="*80)
         
-        # 复制基础脚本
+        # 从 unity_examples/ 复制所有Unity C#脚本
         source_scripts_dir = self.project_root / "unity_examples"
-        base_scripts = [
-            "BrainVisualization.cs",
-            "BrainDataStructures.cs",
-            "BrainConfigLoader.cs",
-            "WebSocketClient.cs",
-            "StimulationInput.cs",
-            "TimelineController.cs"
-        ]
+        if source_scripts_dir.exists():
+            unity_scripts = [
+                "WebSocketClient.cs",
+                "BrainDataStructures.cs", 
+                "BrainConfigLoader.cs",
+                "BrainVisualization.cs",
+                "StimulationInput.cs",
+                "TimelineController.cs",
+                "CacheToJsonConverter.cs"
+            ]
+            
+            for script in unity_scripts:
+                src = source_scripts_dir / script
+                if src.exists():
+                    dst = self.unity_scripts_dir / script
+                    import shutil
+                    shutil.copy2(src, dst)
+                    logger.info(f"  ✓ 复制: {script}")
+                else:
+                    logger.warning(f"  ⚠ 脚本未找到: {script}")
+        else:
+            logger.warning(f"  ⚠ unity_examples目录未找到: {source_scripts_dir}")
         
-        for script in base_scripts:
-            src = source_scripts_dir / script
-            if src.exists():
-                dst = self.unity_scripts_dir / script
-                shutil.copy2(src, dst)
-                logger.info(f"  ✓ 复制脚本: {script}")
-            else:
-                logger.warning(f"  ⚠ 脚本未找到: {script}")
-        
-        # Note: Additional helper scripts like DataLoader, AnimationController, 
-        # and ModelInterface can be generated if needed, but the core scripts
-        # (BrainVisualization, StimulationInput, etc.) are now copied from unity_examples
-        
-        logger.info("  ✓ Unity脚本生成完成")
+        logger.info("  ✓ Unity脚本复制完成")
     
     def _generate_data_loader_script(self):
         """生成数据加载脚本"""
