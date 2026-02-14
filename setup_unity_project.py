@@ -274,6 +274,13 @@ Unity项目资源文件：
         - StimulationInput.cs: 虚拟刺激输入界面
         - ModelInterface.cs: 与后端服务器通信接口
         
+        同时复制Unity C#脚本（来自unity_examples/）：
+        - WebSocketClient.cs: WebSocket客户端（前后端通信）
+        - BrainDataStructures.cs: 数据结构定义
+        - BrainConfigLoader.cs: 配置加载器
+        - BrainVisualization.cs: 可视化控制器
+        - CacheToJsonConverter.cs: Cache文件自动转换为JSON
+        
         这些是基础模板，用户可以根据具体需求进行自定义。
         """
         logger.info("\n" + "="*80)
@@ -286,6 +293,31 @@ Unity项目资源文件：
         self._generate_animation_controller_script()
         self._generate_stimulation_input_script()
         self._generate_model_interface_script()
+        
+        # 复制Unity C#脚本（从unity_examples/）
+        source_scripts_dir = self.project_root / "unity_examples"
+        if source_scripts_dir.exists():
+            unity_scripts = [
+                "WebSocketClient.cs",
+                "BrainDataStructures.cs", 
+                "BrainConfigLoader.cs",
+                "BrainVisualization.cs",
+                "CacheToJsonConverter.cs",
+                "StimulationInput.cs",
+                "TimelineController.cs"
+            ]
+            
+            for script in unity_scripts:
+                src = source_scripts_dir / script
+                if src.exists():
+                    dst = self.unity_scripts_dir / script
+                    import shutil
+                    shutil.copy2(src, dst)
+                    logger.info(f"  ✓ 复制: {script}")
+                else:
+                    logger.warning(f"  ⚠ 脚本未找到: {script}")
+        else:
+            logger.warning(f"  ⚠ unity_examples目录未找到: {source_scripts_dir}")
         
         logger.info("  ✓ Unity脚本生成完成")
         logger.info("  提示: 生成的脚本是基础模板，可根据需要自定义")

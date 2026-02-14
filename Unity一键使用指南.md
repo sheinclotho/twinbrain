@@ -43,15 +43,41 @@ python setup_unity_project.py --auto-setup
 - ✅ Unity C#脚本（在 `Unity_Assets/Scripts/` 中）
 - ✅ 配置文件和说明文档
 
-**生成的Unity C#脚本模板：**
+**生成和复制的Unity C#脚本：**
+
+*自动生成的模板脚本:*
 - `BrainDataLoader.cs` - 数据加载器
 - `AnimationController.cs` - 动画控制
-- `StimulationInput.cs` - 刺激输入UI
 - `ModelInterface.cs` - 模型接口
+
+*从unity_examples复制的功能脚本:*
+- `WebSocketClient.cs` - WebSocket客户端（前后端通信）⭐
+- `BrainDataStructures.cs` - 数据结构定义
+- `BrainConfigLoader.cs` - 配置加载器
+- `BrainVisualization.cs` - 可视化控制器
+- `CacheToJsonConverter.cs` - **Cache自动转JSON工具** ⭐⭐
+- `StimulationInput.cs` - 刺激输入UI
+- `TimelineController.cs` - 时间轴控制
 
 **注意**: 脚本是基础模板，根据需要自定义
 
 ### 阶段2: 准备数据
+
+**方式A: 使用Unity内置按钮自动转换（推荐）** ⭐⭐
+
+1. 将预处理缓存数据放入cache文件夹：
+```bash
+cp preprocessed_data.pkl unity_project/brain_data/cache/
+```
+
+2. 启动后端服务器：
+```bash
+python unity_startup.py --model results/your_model.pt --output unity_project
+```
+
+3. 在Unity中点击"转换Cache到JSON"按钮，自动完成转换！
+
+**方式B: 使用命令行手动转换**
 
 **重要**: 以下路径使用的是默认输出目录 `unity_project/`，如果你使用了 `--output-dir` 指定其他目录，请相应修改路径。
 
@@ -118,6 +144,42 @@ python -m unity_integration.brain_state_exporter \
    - 缩放（Scale: 0.5, 0.5, 0.5）
    - 拖到Project创建Prefab命名为 `BrainRegion`
    - 赋值给Brain Data Loader的Region Prefab字段
+
+#### 5. 设置Cache自动转换UI（可选但推荐）⭐⭐
+
+这个功能允许你在Unity中点击按钮自动将cache文件转换为JSON：
+
+1. **创建UI Canvas**（如果没有）
+   - Hierarchy > UI > Canvas
+
+2. **创建转换按钮**
+   - 右键Canvas > UI > Button
+   - 命名为 `ConvertButton`
+   - 设置文本为"转换Cache到JSON"
+
+3. **创建状态文本**
+   - 右键Canvas > UI > Text
+   - 命名为 `StatusText`
+   - 设置位置在按钮下方
+
+4. **创建进度条**（可选）
+   - 右键Canvas > UI > Slider
+   - 命名为 `ProgressSlider`
+
+5. **添加CacheToJsonConverter脚本**
+   - 选中Canvas或创建新的空GameObject
+   - Add Component > Cache To Json Converter
+   - 配置参数：
+     - Convert Button: 拖入ConvertButton
+     - Status Text: 拖入StatusText
+     - Progress Slider: 拖入ProgressSlider（如果有）
+     - Backend Url: `http://localhost:8765`（默认）
+
+6. **使用方法**：
+   - 确保后端服务器已运行
+   - 将cache文件放入 `unity_project/brain_data/cache/`
+   - 在Unity中点击"转换Cache到JSON"按钮
+   - 等待转换完成，JSON文件会自动生成到 `model_output/`
 
 ## 🔄 实时工作流（可选）
 
