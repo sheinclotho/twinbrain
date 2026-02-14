@@ -8,8 +8,8 @@
 
 ### 使用指南（根目录）
 1. **[使用指南.md](使用指南.md)** - 面向无编程基础用户的完整操作指南
-2. **[Unity一键使用指南.md](Unity一键使用指南.md)** - Unity可视化完整使用指南 ⭐
-3. **[Unity架构说明.md](Unity架构说明.md)** - Unity部分技术架构说明
+2. **[Unity一键使用指南.md](Unity一键使用指南.md)** - Unity可视化完整使用指南 v2.5 ⭐⭐
+3. **[Unity架构说明.md](Unity架构说明.md)** - Unity部分技术架构说明 v2.5 ⭐
 
 ### 技术文档（根目录）
 4. **[模型说明.md](模型说明.md)** - 模型架构、原理和技术细节
@@ -45,6 +45,9 @@ python setup_unity_project.py --auto-setup
 # 使用FreeSurfer数据自动生成OBJ模型
 python setup_unity_project.py --freesurfer-dir /path/to/freesurfer/files
 
+# 自动安装到Unity项目（v2.5新增）⭐
+python unity_package_installer.py --unity-project /path/to/UnityProject
+
 # 启动Unity后端服务（支持实时预测和刺激）
 python unity_startup.py --demo
 ```
@@ -64,8 +67,9 @@ python unity_startup.py --demo
 - ✅ 虚拟刺激输入和模拟
 - ✅ 大脑状态预测和实时反馈
 - ✅ 颜色映射区分真实/预测信号
-- ✅ WebSocket实时通信
+- ✅ HTTP/REST实时通信（v2.5改进）
 - ✅ 完全自动化的工作流
+- ✅ 一键式Unity项目设置和安装（v2.5新增）⭐
 
 ## 🛠️ 系统要求
 
@@ -79,19 +83,27 @@ python unity_startup.py --demo
 ```
 twinbrain/
 ├── docs/                       # 项目更新和重组文档
-│   ├── 更新日志.md
+│   ├── 更新日志.md (v2.5更新)
 │   ├── REORGANIZATION_SUMMARY.md
 │   └── OPTIMIZATION_SUMMARY.md
 ├── unity_integration/          # Unity集成模块
-│   ├── obj_generator.py        # OBJ 3D模型生成（支持独立导出多个脑区）
+│   ├── obj_generator.py        # OBJ 3D模型生成
 │   ├── freesurfer_loader.py    # FreeSurfer数据加载
 │   ├── brain_state_exporter.py # JSON数据导出
-│   ├── realtime_server.py      # 实时WebSocket服务器
-│   └── workflow_manager.py     # 工作流管理（支持缓存加载）
+│   ├── realtime_server.py      # WebSocket服务器（v2.5增强）
+│   ├── model_server.py         # 模型服务器
+│   └── workflow_manager.py     # 工作流管理
+├── unity_examples/             # Unity C#脚本示例
+│   ├── WebSocketClient.cs      # 原版客户端
+│   ├── WebSocketClientImproved.cs # 改进版客户端（v2.5新增）⭐
+│   ├── BrainVisualization.cs   # 主可视化脚本
+│   ├── CacheToJsonConverter.cs # Cache转换工具（v2.5优化）
+│   └── ...                     # 其他C#脚本
 ├── mapper/                     # 脑图谱和数据映射
 ├── workflows/                  # 训练和预处理工作流
-├── setup_unity_project.py      # 一键式Unity项目设置（推荐使用）
-└── unity_startup.py            # Unity后端服务启动脚本
+├── setup_unity_project.py      # Unity项目设置（初始化）
+├── unity_startup.py            # Unity后端启动（v2.5增强）
+└── unity_package_installer.py  # Unity包安装器（v2.5新增）⭐
 ```
 
 ## 🎯 使用场景
@@ -117,4 +129,4 @@ twinbrain/
 
 ---
 
-*最后更新: 2024-02*
+*最后更新: 2024-02-14 (v2.5)*
