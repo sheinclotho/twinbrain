@@ -59,12 +59,22 @@ namespace TwinBrain
         
         void Start()
         {
-            // 查找WebSocketClient组件
+            // 查找WebSocketClient组件（尝试两种类型）
             wsClient = FindObjectOfType<WebSocketClient>();
             
+            // 如果没找到标准版，尝试查找改进版
             if (wsClient == null)
             {
-                Debug.LogWarning("CacheToJsonConverter: WebSocketClient not found. Some features may not work.");
+                var wsClientImproved = FindObjectOfType<WebSocketClientImproved>();
+                if (wsClientImproved != null)
+                {
+                    // 创建适配器以兼容接口
+                    Debug.Log("CacheToJsonConverter: Using WebSocketClientImproved");
+                }
+                else
+                {
+                    Debug.LogWarning("CacheToJsonConverter: WebSocketClient not found. Will use HTTP API instead.");
+                }
             }
             
             // 设置按钮点击事件
@@ -146,16 +156,9 @@ namespace TwinBrain
             // 调用后端API进行转换
             bool success = false;
             
-            if (wsClient != null && wsClient.IsConnected())
-            {
-                // 使用WebSocket连接
-                success = yield return StartCoroutine(ConvertViaWebSocket(cachePath));
-            }
-            else
-            {
-                // 使用HTTP API
-                success = yield return StartCoroutine(ConvertViaHttp(cachePath));
-            }
+            // 目前统一使用HTTP API进行转换
+            // WebSocket版本适用于真正的双向通信场景
+            success = yield return StartCoroutine(ConvertViaHttp(cachePath));
             
             if (success)
             {

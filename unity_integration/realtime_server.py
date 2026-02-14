@@ -143,28 +143,41 @@ class BrainVisualizationServer:
         """Process client request and return response."""
         request_type = request.get("type", "unknown")
         
-        if request_type == "get_state":
-            return await self.handle_get_state(request)
+        # Log the request
+        self.logger.info(f"Processing request: {request_type}")
         
-        elif request_type == "predict":
-            return await self.handle_predict(request)
-        
-        elif request_type == "simulate":
-            return await self.handle_simulate(request)
-        
-        elif request_type == "stream_start":
-            return await self.handle_stream_start(request)
-        
-        elif request_type == "stream_stop":
-            return {"type": "stream_stopped", "success": True}
-        
-        elif request_type == "convert_cache":
-            return await self.handle_convert_cache(request)
-        
-        else:
+        try:
+            if request_type == "get_state":
+                return await self.handle_get_state(request)
+            
+            elif request_type == "predict":
+                return await self.handle_predict(request)
+            
+            elif request_type == "simulate":
+                return await self.handle_simulate(request)
+            
+            elif request_type == "stream_start":
+                return await self.handle_stream_start(request)
+            
+            elif request_type == "stream_stop":
+                return {"type": "stream_stopped", "success": True}
+            
+            elif request_type == "convert_cache":
+                return await self.handle_convert_cache(request)
+            
+            else:
+                self.logger.warning(f"Unknown request type: {request_type}")
+                return {
+                    "type": "error",
+                    "success": False,
+                    "message": f"Unknown request type: {request_type}"
+                }
+        except Exception as e:
+            self.logger.error(f"Error processing {request_type}: {e}", exc_info=True)
             return {
                 "type": "error",
-                "message": f"Unknown request type: {request_type}"
+                "success": False,
+                "message": f"Server error: {str(e)}"
             }
     
     async def handle_get_state(self, request: Dict[str, Any]) -> Dict[str, Any]:
@@ -221,6 +234,11 @@ class BrainVisualizationServer:
     async def handle_predict(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """Handle prediction request."""
         n_steps = request.get("n_steps", 10)
+        
+        # Input validation
+        if not isinstance(n_steps, int) or n_steps <= 0 or n_steps > 1000:
+            self.logger.warning(f"Invalid n_steps: {n_steps}, using default 10")
+            n_steps = 10
         
         try:
             # Use ModelServer if available
@@ -284,6 +302,14 @@ class BrainVisualizationServer:
         """Handle stimulation simulation request."""
         stimulation = request.get("stimulation", {})
         
+        # Input validation
+        if not stimulation or not isinstance(stimulation, dict):
+            return {
+                "type": "error",
+                "success": False,
+                "message": "Invalid stimulation parameters"
+            }
+        
         try:
             import torch
             import numpy as np
@@ -295,7 +321,34 @@ class BrainVisualizationServer:
             frequency = stimulation.get("frequency", 10.0)
             duration = stimulation.get("duration", 20)
             
+            # Validate target regions
+            if not isinstance(target_regions, list) or len(target_regions) == 0:
+                return {
+                    "type": "error",
+                    "success": False,
+                    "message": "target_regions must be a non-empty list"
+                }
+            
+            # Validate and clamp values
+            amplitude = float(max(0.0, min(10.0, amplitude)))
+            frequency = float(max(0.1, min(100.0, frequency)))
+            duration = int(max(1, min(1000, duration)))
+            
+            # Filter valid region IDs
             n_regions = 200
+            valid_regions = [r for r in target_regions if isinstance(r, int) and 0 <= r < n_regions]
+            
+            if len(valid_regions) == 0:
+                return {
+                    "type": "error",
+                    "success": False,
+                    "message": f"No valid target regions (must be 0-{n_regions-1})"
+                }
+            
+            if len(valid_regions) < len(target_regions):
+                self.logger.warning(f"Filtered {len(target_regions) - len(valid_regions)} invalid region IDs")
+                target_regions = valid_regions
+            
             n_steps = 50
             
             # Use ModelServer if available
@@ -559,6 +612,10 @@ class BrainVisualizationServer:
         """Handle stream start request."""
         fps = request.get("fps", 10)
         duration = request.get("duration", 60)
+        
+        # Input validation
+        fps = int(max(1, min(60, fps)))
+        duration = int(max(1, min(3600, duration)))
         
         # Start streaming in background
         asyncio.create_task(self.stream_brain_activity(fps, duration))
