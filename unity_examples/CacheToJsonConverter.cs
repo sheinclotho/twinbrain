@@ -196,10 +196,6 @@ namespace TwinBrain
             string requestJson = JsonConvert.SerializeObject(request);
             
             // 发送请求（需要WebSocketClient支持异步响应）
-            bool responseReceived = false;
-            string responseData = null;
-            
-            // 注册回调（如果WebSocketClient支持）
             // 这里简化处理，实际需要WebSocketClient提供回调机制
             
             yield return new WaitForSeconds(1f);
