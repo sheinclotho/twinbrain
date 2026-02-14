@@ -21,7 +21,7 @@ namespace TwinBrain
     /// 4. 点击"转换Cache到JSON"按钮即可自动处理
     /// 
     /// 工作流程:
-    /// - 用户将cache文件(.pkl/.npy)放入 unity_project/brain_data/cache/
+    /// - 用户将cache文件(.pt PyTorch格式)放入 unity_project/brain_data/cache/
     /// - 点击按钮
     /// - 脚本调用后端 brain_state_exporter 接口
     /// - 后端自动读取cache文件，生成JSON到 model_output/
@@ -59,12 +59,22 @@ namespace TwinBrain
         
         void Start()
         {
-            // 查找WebSocketClient组件
+            // 查找WebSocketClient组件（尝试两种类型）
             wsClient = FindObjectOfType<WebSocketClient>();
             
+            // 如果没找到标准版，尝试查找改进版
             if (wsClient == null)
             {
-                Debug.LogWarning("CacheToJsonConverter: WebSocketClient not found. Some features may not work.");
+                var wsClientImproved = FindObjectOfType<WebSocketClientImproved>();
+                if (wsClientImproved != null)
+                {
+                    // 创建适配器以兼容接口
+                    Debug.Log("CacheToJsonConverter: Using WebSocketClientImproved");
+                }
+                else
+                {
+                    Debug.LogWarning("CacheToJsonConverter: WebSocketClient not found. Will use HTTP API instead.");
+                }
             }
             
             // 设置按钮点击事件
@@ -119,14 +129,14 @@ namespace TwinBrain
                 yield break;
             }
             
-            // 查找cache文件
+            // 查找cache文件（仅.pt/.pth格式，这是实际的PyTorch缓存格式）
             string[] cacheFiles = Directory.GetFiles(cachePath, "*.*");
             List<string> validCacheFiles = new List<string>();
             
             foreach (string file in cacheFiles)
             {
                 string ext = Path.GetExtension(file).ToLower();
-                if (ext == ".pkl" || ext == ".npy" || ext == ".npz" || ext == ".pt" || ext == ".pth")
+                if (ext == ".pt" || ext == ".pth")
                 {
                     validCacheFiles.Add(file);
                 }
@@ -134,7 +144,7 @@ namespace TwinBrain
             
             if (validCacheFiles.Count == 0)
             {
-                UpdateStatus("警告: 未找到cache文件 (.pkl, .npy, .pt等)", Color.yellow);
+                UpdateStatus("警告: 未找到cache文件 (.pt, .pth)", Color.yellow);
                 yield return new WaitForSeconds(2f);
                 FinishConversion();
                 yield break;
@@ -146,16 +156,9 @@ namespace TwinBrain
             // 调用后端API进行转换
             bool success = false;
             
-            if (wsClient != null && wsClient.IsConnected())
-            {
-                // 使用WebSocket连接
-                success = yield return StartCoroutine(ConvertViaWebSocket(cachePath));
-            }
-            else
-            {
-                // 使用HTTP API
-                success = yield return StartCoroutine(ConvertViaHttp(cachePath));
-            }
+            // 目前统一使用HTTP API进行转换
+            // WebSocket版本适用于真正的双向通信场景
+            success = yield return StartCoroutine(ConvertViaHttp(cachePath));
             
             if (success)
             {

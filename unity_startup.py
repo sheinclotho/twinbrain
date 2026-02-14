@@ -94,9 +94,14 @@ def check_unity_structure(output_dir: Path):
     logger.info("\n检查Unity项目结构...")
     
     required_dirs = [
-        output_dir / "Scripts",
-        output_dir / "state",
-        output_dir / "data"
+        output_dir / "brain_data",
+        output_dir / "brain_data" / "cache",
+        output_dir / "brain_data" / "model_output",
+    ]
+    
+    optional_dirs = [
+        output_dir / "Unity_Assets" / "Scripts",
+        output_dir / "freesurfer_files",
     ]
     
     missing_dirs = []
@@ -104,30 +109,56 @@ def check_unity_structure(output_dir: Path):
         if dir_path.exists():
             logger.info(f"✓ {dir_path.relative_to(output_dir)}")
         else:
-            logger.warning(f"✗ {dir_path.relative_to(output_dir)}")
+            logger.warning(f"✗ {dir_path.relative_to(output_dir)} (将创建)")
             missing_dirs.append(dir_path)
     
-    if missing_dirs:
-        logger.warning("⚠ 部分目录缺失。运行 setup_unity_project.py 创建完整结构")
-        return False
+    # Create missing directories
+    for dir_path in missing_dirs:
+        dir_path.mkdir(parents=True, exist_ok=True)
+        logger.info(f"  创建: {dir_path.relative_to(output_dir)}")
+    
+    # Check optional directories
+    for dir_path in optional_dirs:
+        if dir_path.exists():
+            logger.info(f"✓ {dir_path.relative_to(output_dir)} (可选)")
+        else:
+            logger.info(f"  {dir_path.relative_to(output_dir)} (可选，未创建)")
     
     return True
 
 
 def load_model(model_path: Optional[Path]):
     """加载训练好的模型"""
-    if not model_path or not model_path.exists():
-        logger.warning("⚠ 模型文件不存在，将使用空模型（仅演示）")
+    if not model_path:
+        logger.warning("⚠ 未指定模型文件")
+        return None
+        
+    if not model_path.exists():
+        logger.warning(f"⚠ 模型文件不存在: {model_path}")
         return None
     
     try:
         import torch
         logger.info(f"加载模型: {model_path}")
+        
+        # 检查文件大小
+        file_size = model_path.stat().st_size / (1024 * 1024)  # MB
+        logger.info(f"模型文件大小: {file_size:.2f} MB")
+        
         checkpoint = torch.load(model_path, map_location='cpu')
+        
+        # 打印模型信息
+        if isinstance(checkpoint, dict):
+            logger.info(f"Checkpoint keys: {list(checkpoint.keys())}")
+            if 'epoch' in checkpoint:
+                logger.info(f"训练轮次: {checkpoint['epoch']}")
+        
         logger.info("✓ 模型加载成功")
         return checkpoint
     except Exception as e:
         logger.error(f"❌ 模型加载失败: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -150,12 +181,11 @@ async def start_server(
         model = load_model(model_path)
         
         # 创建导出器
-        state_dir = output_dir / "state"
+        state_dir = output_dir / "brain_data" / "model_output"
         state_dir.mkdir(parents=True, exist_ok=True)
         
         exporter = BrainStateExporter(
-            atlas_info=None,
-            output_dir=str(state_dir)
+            atlas_info=None
         )
         logger.info(f"✓ 状态导出器: {state_dir}")
         
@@ -271,19 +301,32 @@ def main():
             logger.error(f"❌ 模型文件不存在: {model_path}")
             sys.exit(1)
     elif not args.demo:
-        logger.warning("⚠ 未指定模型文件，将尝试使用默认模型")
-        # Try trained model first (from training workflow)
-        default_model = project_root / "test_file3" / "sub-01" / "results" / "hetero_gnn_trained.pt"
-        if not default_model.exists():
-            # Fallback to results directory
-            default_model = project_root / "results" / "hetero_gnn_trained.pt"
+        logger.warning("⚠ 未指定模型文件，尝试查找默认模型...")
         
-        if default_model.exists():
-            model_path = default_model
-            logger.info(f"✓ 使用默认模型: {model_path}")
-        else:
-            logger.warning("⚠ 默认模型不存在，使用演示模式")
-            logger.info("提示: 训练后的模型通常在 test_file3/sub-XX/results/hetero_gnn_trained.pt")
+        # Search for models in common locations
+        # Limit to first 5 results directories to avoid excessive filesystem
+        # traversal in large projects with many subdirectories
+        search_paths = [
+            project_root / "results" / "hetero_gnn_trained.pt",
+            project_root / "test_file3" / "sub-01" / "results" / "hetero_gnn_trained.pt",
+        ]
+        
+        # Also search in subdirectories (limited to first 5 to prevent performance issues)
+        results_dirs = list(project_root.glob("**/results"))
+        for results_dir in results_dirs[:5]:
+            search_paths.append(results_dir / "hetero_gnn_trained.pt")
+            search_paths.append(results_dir / "best_model.pt")
+        
+        for path in search_paths:
+            if path.exists():
+                model_path = path
+                logger.info(f"✓ 找到模型: {model_path}")
+                break
+        
+        if not model_path:
+            logger.warning("⚠ 未找到模型文件，使用演示模式")
+            logger.info("提示: 可以使用 --model 参数指定模型文件")
+            logger.info("提示: 或使用 --demo 参数明确使用演示模式")
     
     # 启动服务器
     try:

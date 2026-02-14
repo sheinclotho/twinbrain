@@ -1,397 +1,568 @@
-# TwinBrain Unity 一键使用指南
+# TwinBrain Unity 完整使用指南 (v2.5)
 
-## 🎯 目标
+## 🎯 概述
 
-基于真实FreeSurfer数据和实际脑数据，完成Unity可视化设置。
+TwinBrain Unity集成提供大脑活动的3D可视化功能，支持实时预测和虚拟刺激模拟。本指南涵盖从零开始到完整运行的所有步骤。
 
-## 📋 前提条件
+## 📋 系统要求
 
-1. **FreeSurfer文件**（可选，但推荐）
-   - lh.pial, rh.pial（表面文件）
-   - lh.Schaefer2018_200Parcels_7Networks_order.annot
-   - rh.Schaefer2018_200Parcels_7Networks_order.annot
+### 必需
+- **Unity**: 2019.1+ (推荐 2020 LTS或2021 LTS)
+- **Python**: 3.8+
+- **TwinBrain**: 最新版本
+- **操作系统**: Windows/macOS/Linux
 
-2. **实际脑数据**（可选）
-   - fMRI数据（NIfTI格式）
-   - 或预处理后的时间序列
+### 可选
+- FreeSurfer表面数据（用于生成真实3D脑区模型）
+- 训练好的模型文件（用于实时预测）
 
-## ⚡ 快速开始
+## 🚀 快速开始（3步完成）
 
-### 阶段1: 构建（一次性，使用FreeSurfer）
+### 方式A: 使用自动安装工具（推荐）⭐⭐⭐
 
 ```bash
-# 克隆仓库
+# 1. 克隆TwinBrain仓库
 git clone https://github.com/sheinclotho/twinbrain.git
 cd twinbrain
 
-# 如果有FreeSurfer文件，生成真实OBJ模型
+# 2. 创建Unity项目（在Unity Hub中）
+# 项目类型: 3D
+# 项目名称: TwinBrain_Demo
+# 位置: 任意位置，记住路径
+
+# 3. 自动安装TwinBrain到Unity项目
+python unity_package_installer.py --unity-project /path/to/TwinBrain_Demo
+
+# 完成！现在可以在Unity中打开项目
+```
+
+### 方式B: 手动设置
+
+详见下方"详细安装步骤"。
+
+## 📦 详细安装步骤
+
+### 阶段1: 生成Unity资源（一次性）
+
+#### 1.1 生成项目结构和脚本
+
+```bash
+cd twinbrain
+
+# 基本设置（创建文件夹结构和脚本）
+python setup_unity_project.py --auto-setup
+
+# 或使用FreeSurfer数据生成真实脑区OBJ模型
 python setup_unity_project.py --freesurfer-dir /path/to/freesurfer/files
 ```
 
-如果没有FreeSurfer文件：
-```bash
-# 创建基本项目结构
-python setup_unity_project.py --auto-setup
-
-# 然后将FreeSurfer文件放入生成的freesurfer_files/文件夹
-# 再次运行生成OBJ模型
+**生成的内容**:
+```
+unity_project/
+├── freesurfer_files/         # FreeSurfer数据存放位置
+├── brain_data/
+│   ├── cache/                # 预处理缓存文件(.pt PyTorch格式)
+│   ├── model_output/         # JSON状态文件（Unity读取）
+│   └── original/             # 原始数据
+├── Unity_Assets/
+│   ├── Scripts/              # Unity C#脚本
+│   └── Models/               # 3D脑区模型（如果使用FreeSurfer）
+└── unity_config.json         # 配置文件
 ```
 
-**这会生成项目文件夹 `unity_project/`，包含：**
-- ✅ 200个脑区的真实3D OBJ模型（从FreeSurfer，在 `Unity_Assets/Models/` 中）
-- ✅ 正确的文件夹结构（详见下方）
-- ✅ Unity C#脚本（在 `Unity_Assets/Scripts/` 中）
-- ✅ 配置文件和说明文档
-
-**Unity C#脚本（从 unity_examples/ 复制）：**
-- `WebSocketClient.cs` - WebSocket客户端（前后端通信）⭐
-- `BrainVisualization.cs` - 可视化控制器
-- `BrainDataStructures.cs` - 数据结构定义
-- `BrainConfigLoader.cs` - 配置加载器
-- `StimulationInput.cs` - 刺激输入UI
-- `TimelineController.cs` - 时间轴控制
-- `CacheToJsonConverter.cs` - **Cache自动转JSON工具** ⭐⭐
-
-### 阶段2: 准备数据
-
-**方式A: 使用Unity内置按钮自动转换（推荐）** ⭐⭐
-
-1. 将预处理缓存数据放入cache文件夹：
-```bash
-cp preprocessed_data.pkl unity_project/brain_data/cache/
-```
-
-2. 启动后端服务器：
-```bash
-python unity_startup.py --model results/your_model.pt --output unity_project
-```
-
-3. 在Unity中点击"转换Cache到JSON"按钮，自动完成转换！
-
-**方式B: 使用命令行手动转换**
-
-**重要**: 以下路径使用的是默认输出目录 `unity_project/`，如果你使用了 `--output-dir` 指定其他目录，请相应修改路径。
+#### 1.2 安装到Unity项目（使用自动安装工具）
 
 ```bash
-# 将原始fMRI数据放入original文件夹
-cp your_fmri_data.nii unity_project/brain_data/original/
+# 安装所有脚本和资源到Unity项目
+python unity_package_installer.py --unity-project /path/to/UnityProject \
+    --data-dir unity_project
 
-# 或将预处理缓存数据放入cache文件夹
-cp preprocessed_data.pkl unity_project/brain_data/cache/
-
-# 处理数据生成JSON状态文件到model_output文件夹
-python -m unity_integration.brain_state_exporter \
-    --data-dir unity_project/brain_data/cache \
-    --output unity_project/brain_data/model_output
+# 仅验证Unity项目结构
+python unity_package_installer.py --unity-project /path/to/UnityProject --validate-only
 ```
 
-### 阶段3: Unity设置
+**安装内容**:
+- ✅ 所有C#脚本 → `Assets/TwinBrain/Scripts/`
+- ✅ Assembly Definition文件
+- ✅ StreamingAssets目录结构
+- ✅ 配置文件
+- ✅ 使用指南文档
 
-#### 1. 创建Unity项目
+### 阶段2: 配置Unity项目
 
-1. 打开Unity Hub
-2. 创建新的3D项目
-3. 命名（例如：TwinBrain_Demo）
+#### 2.1 安装依赖包
 
-#### 2. 导入资源
+在Unity中：
+1. `Window` > `Package Manager`
+2. 点击 `+` > `Add package from git URL`
+3. 输入: `com.unity.nuget.newtonsoft-json`
+4. 点击 `Add`
 
-**C#脚本：**
-- 将 `unity_project/Unity_Assets/Scripts/` 复制到你的Unity项目的 `Assets/Scripts/`
+#### 2.2 创建场景设置
 
-**3D模型：**（如果使用了FreeSurfer生成）
-- 将 `unity_project/Unity_Assets/Models/` 复制到 `Assets/Models/`
+**创建BrainManager:**
+1. `Hierarchy` > 右键 > `Create Empty`
+2. 命名为 `BrainManager`
 
-**数据文件：**
-- 在Unity项目的 `Assets/` 下创建 `StreamingAssets` 文件夹
-- 将 `unity_project/brain_data/model_output/` 中的JSON文件复制到 `Assets/StreamingAssets/brain_states/`
-- 将 `unity_project/unity_config.json` 复制到 `Assets/StreamingAssets/`
+**添加核心组件:**
 
-#### 3. 安装依赖
+到BrainManager GameObject，点击 `Add Component`，添加以下组件：
 
-**Newtonsoft.Json:**
-1. Window > Package Manager
-2. "+" > "Add package from git URL"
-3. 输入：`com.unity.nuget.newtonsoft-json`
+1. **BrainVisualization** (主可视化)
+   - Json Path: `StreamingAssets/brain_states`
+   - Region Prefab: 创建的脑区预制体（见下方）
+   - Load Sequence: ✓（如果有多个JSON文件）
 
-#### 4. 设置场景
+2. **WebSocketClientImproved** (后端通信)
+   - Server URL: `http://localhost:8765`
+   - Auto Connect: ✓
+   - Auto Reconnect: ✓
 
-1. **创建BrainManager GameObject**
-   - Hierarchy > Create Empty > "BrainManager"
+3. **BrainConfigLoader** (配置加载，可选)
+   - Config Path: `StreamingAssets/config/unity_config.json`
 
-2. **添加核心组件**
-   - Add Component > Brain Visualization（主可视化脚本）
-     - 配置Region Prefab（脑区预制体）
-     - 配置数据路径
-   - Add Component > Brain Config Loader（配置加载器）
-     - Config Path: `StreamingAssets/unity_config.json`
-   - Add Component > WebSocket Client（后端通信，可选）
-     - Server URL: `http://localhost:8765`
-     - Auto Connect: ✓
+#### 2.3 创建脑区预制体
 
-3. **创建脑区预制体**（如果有OBJ模型）
-   - 从 `Assets/Models/` 选择一个OBJ文件
-   - 拖到Scene中，调整大小
-   - 拖到Project创建Prefab
-   - 赋值给Brain Visualization的Region Prefab字段
+**方式A: 使用OBJ模型**（如果用FreeSurfer生成）
+1. 将 `unity_project/Unity_Assets/Models/` 中的OBJ文件导入Unity
+2. 拖拽一个OBJ到Scene，调整大小
+3. 拖拽到Project窗口创建Prefab
+4. 赋值给BrainVisualization的Region Prefab
 
-   如果没有OBJ模型，使用简单球体：
-   - Hierarchy > 3D Object > Sphere
-   - 缩放（Scale: 0.5, 0.5, 0.5）
-   - 拖到Project创建Prefab命名为 `BrainRegion`
-   - 赋值给Brain Visualization的Region Prefab字段
+**方式B: 使用简单球体**
+1. `Hierarchy` > `3D Object` > `Sphere`
+2. 缩放: `(0.5, 0.5, 0.5)`
+3. 添加Material（可选，用于颜色变化）
+4. 拖拽到Project创建Prefab，命名 `BrainRegion`
+5. 赋值给BrainVisualization的Region Prefab
 
-#### 5. 设置Cache自动转换UI（可选但推荐）⭐⭐
+#### 2.4 设置Cache自动转换UI（推荐）⭐
 
-这个功能允许你在Unity中点击按钮自动将cache文件转换为JSON：
+这允许在Unity中一键转换cache文件为JSON：
 
-1. **创建UI Canvas**（如果没有）
-   - Hierarchy > UI > Canvas
+1. **创建UI Canvas**
+   - `Hierarchy` > `UI` > `Canvas`
 
 2. **创建转换按钮**
-   - 右键Canvas > UI > Button
-   - 命名为 `ConvertButton`
-   - 设置文本为"转换Cache到JSON"
+   - 右键Canvas > `UI` > `Button`
+   - 命名: `ConvertButton`
+   - Text: "转换Cache到JSON"
 
 3. **创建状态文本**
-   - 右键Canvas > UI > Text
-   - 命名为 `StatusText`
-   - 设置位置在按钮下方
+   - 右键Canvas > `UI` > `Text`
+   - 命名: `StatusText`
 
 4. **创建进度条**（可选）
-   - 右键Canvas > UI > Slider
-   - 命名为 `ProgressSlider`
+   - 右键Canvas > `UI` > `Slider`
+   - 命名: `ProgressSlider`
 
-5. **添加CacheToJsonConverter脚本**
-   - 选中Canvas或创建新的空GameObject
-   - Add Component > Cache To Json Converter
-   - 配置参数：
+5. **添加CacheToJsonConverter组件**
+   - 选中Canvas或创建新GameObject
+   - `Add Component` > `Cache To Json Converter`
+   - 配置:
      - Convert Button: 拖入ConvertButton
      - Status Text: 拖入StatusText
-     - Progress Slider: 拖入ProgressSlider（如果有）
-     - Backend Url: `http://localhost:8765`（默认）
+     - Progress Slider: 拖入ProgressSlider
+     - Backend Url: `http://localhost:8765`
 
-6. **使用方法**：
-   - 确保后端服务器已运行
-   - 将cache文件放入 `unity_project/brain_data/cache/`
-   - 在Unity中点击"转换Cache到JSON"按钮
-   - 等待转换完成，JSON文件会自动生成到 `model_output/`
+### 阶段3: 准备数据
 
-## 🔄 实时工作流（可选）
+#### 3.1 准备Brain State JSON文件
 
-### 启动后端服务器
+**方式A: 从Cache转换（推荐）**
 
 ```bash
-# 在项目目录
-python -m unity_integration.realtime_server
-```
+# 1. 将预处理的cache文件放入cache目录
+cp preprocessed_data.pkl unity_project/brain_data/cache/
 
-### Unity连接
+# 2. 启动后端服务器
+python unity_startup.py --demo
 
-1. 选中BrainManager
-2. Add Component > WebSocket Client
-3. Server URL: `ws://localhost:8765`
-4. Auto Connect: ✓
-
-### 工作流程
-
-1. Unity请求预测
-2. 后端处理生成JSON
-3. 自动保存到 `state/` 文件夹
-4. Unity自动加载新状态
-
-## 📊 数据处理流程
-
-```
-原始数据
-  ↓ [放入data/raw/]
-预处理
-  ↓ [自动缓存到data/cache/]
-状态提取
-  ↓ [生成JSON到state/]
-Unity加载
-  ↓ [从StreamingAssets/state/读取]
-可视化
-```
-
-## 🎮 Unity操作
-
-### 快捷键
-- **空格**: 播放/暂停动画
-- **R**: 重新加载数据
-
-### 可视化参数
-
-在Brain Visualization组件中调整：
-
-| 参数 | 说明 | 推荐值 |
-|-----|------|--------|
-| Region Scale | 脑区大小 | 0.5-2.0 |
-| Activity Threshold | 显示阈值 | 0.1-0.5 |
-| Show Connections | 显示连接 | 开/关 |
-| Connection Threshold | 连接阈值 | 0.3-0.7 |
-| FPS | 动画帧率 | 5-30 |
-
-## 📁 文件夹说明
-
-**setup_unity_project.py 生成的目录结构：**
-
-```
-unity_project/                   # 默认输出目录（可用--output-dir修改）
-├── freesurfer_files/            # 【放置】FreeSurfer文件
-│   ├── lh.pial                  # 左半球表面
-│   ├── rh.pial                  # 右半球表面
-│   ├── lh.Schaefer*.annot       # 左半球标注
-│   └── rh.Schaefer*.annot       # 右半球标注
-├── brain_data/                  # 脑数据目录
-│   ├── original/                # 【放置】原始fMRI/EEG数据
-│   ├── cache/                   # 【放置】预处理缓存文件(.pkl/.npy)
-│   └── model_output/            # 【生成】JSON状态文件（Unity读取）
-├── Unity_Assets/                # Unity资源
-│   ├── Scripts/                 # 【生成】Unity C#脚本模板
-│   │   ├── BrainDataLoader.cs
-│   │   ├── AnimationController.cs
-│   │   ├── StimulationInput.cs
-│   │   └── ModelInterface.cs
-│   └── Models/                  # 【生成】3D脑区模型（如用FreeSurfer）
-│       ├── region_0001.obj
-│       ├── region_0002.obj
-│       └── ...
-└── unity_config.json            # 【生成】Unity配置文件
-```
-
-**使用说明：**
-- 【放置】= 需要用户放入的文件
-- 【生成】= setup_unity_project.py自动生成的文件
-
-## ❓ 常见问题
-
-### Q: FreeSurfer文件要放到哪个文件夹？
-A: 
-1. 先运行 `python setup_unity_project.py --auto-setup` 创建目录结构
-2. 将FreeSurfer文件放入 `unity_project/freesurfer_files/` 文件夹：
-   - `lh.pial`, `rh.pial`
-   - `lh.Schaefer2018_200Parcels_7Networks_order.annot`
-   - `rh.Schaefer2018_200Parcels_7Networks_order.annot`
-3. 再次运行生成OBJ模型：`python setup_unity_project.py --freesurfer-dir unity_project/freesurfer_files`
-
-### Q: cache文件要放到哪里？如何自动转换为JSON？
-A: 
-1. 将预处理的cache文件（.pkl或.npy）放入 `unity_project/brain_data/cache/`
-2. 运行以下命令自动生成JSON：
-```bash
+# 3. 在Unity中点击"转换Cache到JSON"按钮
+# 或使用命令行:
 python -m unity_integration.brain_state_exporter \
     --data-dir unity_project/brain_data/cache \
     --output unity_project/brain_data/model_output
 ```
-3. JSON文件会自动生成到 `unity_project/brain_data/model_output/` 目录
 
-### Q: 训练好的模型要放到哪里？
-A: 
-如果要使用实时预测功能（可选）：
-1. 将训练好的模型文件（.pt或.pth）放到项目的 `results/` 目录
-2. 启动后端服务器：
+**方式B: 使用实时预测生成**
+
 ```bash
-python unity_startup.py --model results/your_model.pt --output unity_project
-```
-3. 服务器会自动将预测结果保存为JSON到 `unity_project/brain_data/model_output/`
+# 启动后端服务器（需要训练好的模型）
+python unity_startup.py --model results/hetero_gnn_trained.pt \
+    --output unity_project
 
-**注意**：如果只是可视化已有数据，不需要模型文件，直接使用cache生成的JSON即可。
-
-### Q: Unity中脚本要附加到什么GameObject上？
-A:
-1. 创建空GameObject命名为 `BrainManager`（Hierarchy > Create Empty）
-2. 添加 `BrainDataLoader` 组件（Add Component > Brain Data Loader）
-3. 配置参数：
-   - Json Directory: `StreamingAssets/brain_states`
-   - Config Path: `StreamingAssets/unity_config.json`
-   - Region Prefab: 拖入你的脑区预制体（Sphere或OBJ模型）
-
-### Q: 没有FreeSurfer文件怎么办？
-A: 可以使用基本的Sphere预制体，只需要JSON状态文件即可可视化活动。
-
-### Q: 如何添加更多数据？
-A: 将数据放入 `unity_project/brain_data/cache/` 文件夹，运行 brain_state_exporter，新的JSON会生成到 `model_output/`。
-
-### Q: OBJ模型太多，Unity很慢？
-A: 
-1. 使用Sphere预制体代替OBJ模型
-2. 优化OBJ模型（减少面数）
-3. 使用Unity的LOD系统
-
-### Q: 如何使用不同的atlas？
-A: FreeSurfer标注文件的名称已经指定了atlas类型（如Schaefer2018_200Parcels），系统会自动识别。只需确保标注文件名称正确即可。
-```bash
-# 示例：使用不同数量的脑区
-# 将对应的标注文件放入unity_project/freesurfer_files/文件夹
-# - lh.Schaefer2018_100Parcels_7Networks_order.annot (100个脑区)
-# - lh.Schaefer2018_200Parcels_7Networks_order.annot (200个脑区)
-# - lh.Schaefer2018_400Parcels_7Networks_order.annot (400个脑区)
-python setup_unity_project.py --freesurfer-dir /path/to/fs
+# Unity中使用WebSocketClient请求预测，自动生成JSON
 ```
 
-### Q: 数据在哪里处理？
-A: 使用TwinBrain主项目的处理脚本：
+#### 3.2 复制数据到StreamingAssets
+
 ```bash
-python -m unity_integration.brain_state_exporter \
-    --data-dir unity_project/brain_data/cache \
-    --output unity_project/brain_data/model_output
+# 将生成的JSON文件复制到Unity项目
+cp unity_project/brain_data/model_output/*.json \
+    /path/to/UnityProject/Assets/StreamingAssets/brain_states/
+
+# 复制配置文件
+cp unity_project/unity_config.json \
+    /path/to/UnityProject/Assets/StreamingAssets/config/
+```
+
+### 阶段4: 运行和测试
+
+#### 4.1 启动后端服务器（可选，用于实时功能）
+
+```bash
+# 启动服务器
+python unity_startup.py --model results/hetero_gnn_trained.pt
+
+# 或演示模式（无模型）
+python unity_startup.py --demo
+
+# 自定义输出和端口
+python unity_startup.py --model model.pt --output unity_project --port 8080
+```
+
+#### 4.2 在Unity中运行
+
+1. 在Unity中打开场景
+2. 点击 `Play` 按钮
+3. 应该看到脑区出现并显示活动
+
+## 🎮 使用功能
+
+### 基本可视化
+
+**键盘快捷键**（在BrainVisualization脚本中定义）：
+- `Space`: 播放/暂停动画
+- `R`: 重新加载数据
+- `←/→`: 前一帧/后一帧（如果是序列）
+
+### 实时通信功能
+
+在C#代码中使用WebSocketClient：
+
+```csharp
+using TwinBrain;
+
+public class MyController : MonoBehaviour
+{
+    private WebSocketClientImproved wsClient;
+    
+    void Start()
+    {
+        wsClient = GetComponent<WebSocketClientImproved>();
+        
+        // 订阅事件
+        wsClient.OnConnected += HandleConnected;
+        wsClient.OnBrainStateReceived += HandleBrainState;
+    }
+    
+    void HandleConnected()
+    {
+        Debug.Log("已连接到后端");
+        
+        // 请求大脑状态
+        wsClient.GetBrainState((response) => {
+            Debug.Log("收到大脑状态");
+        });
+    }
+    
+    void HandleBrainState(BrainStateData state)
+    {
+        Debug.Log($"收到 {state.brain_state.regions.Count} 个脑区数据");
+    }
+    
+    // 请求预测
+    public void RequestPrediction()
+    {
+        wsClient.RequestPrediction(10, (response) => {
+            if (response["success"].Value<bool>())
+            {
+                Debug.Log("预测成功");
+            }
+        });
+    }
+    
+    // 模拟刺激
+    public void SimulateStimulation()
+    {
+        int[] targetRegions = {10, 20, 30};
+        float amplitude = 0.5f;
+        
+        wsClient.SimulateStimulation(targetRegions, amplitude, "sine", (response) => {
+            Debug.Log("刺激模拟完成");
+        });
+    }
+}
+```
+
+### Cache文件转换
+
+**在Unity中使用UI：**
+1. 将cache文件放入 `unity_project/brain_data/cache/`
+2. 启动后端服务器
+3. 在Unity中点击"转换Cache到JSON"按钮
+4. 等待转换完成
+5. JSON文件自动生成到 `model_output/`
+
+**使用代码调用：**
+```csharp
+void ConvertCache()
+{
+    string cacheDir = Application.streamingAssetsPath + "/brain_data/cache";
+    string outputDir = Application.streamingAssetsPath + "/brain_data/model_output";
+    
+    wsClient.ConvertCacheToJson(cacheDir, outputDir, (response) => {
+        if (response["success"].Value<bool>())
+        {
+            Debug.Log($"转换成功: {response["converted_count"]} 个文件");
+        }
+        else
+        {
+            Debug.LogError($"转换失败: {response["message"]}");
+        }
+    });
+}
 ```
 
 ## 🔧 高级配置
 
-### 自定义颜色
+### 自定义可视化参数
+
+在BrainVisualization组件中调整：
+
+| 参数 | 说明 | 推荐值 |
+|-----|------|--------|
+| Region Scale | 脑区大小 | 0.5-2.0 |
+| Activity Threshold | 活动显示阈值 | 0.1-0.5 |
+| Show Connections | 显示连接线 | 开/关 |
+| Connection Threshold | 连接显示阈值 | 0.3-0.7 |
+| Animation FPS | 动画帧率 | 5-30 |
+| Color Min/Max | 颜色映射范围 | 根据数据调整 |
+
+### 自定义颜色方案
 
 编辑 `unity_config.json`:
 ```json
 {
-  "colors": {
-    "low_activity": {"r": 0, "g": 255, "b": 0},
-    "high_activity": {"r": 255, "g": 0, "b": 0}
+  "visualization": {
+    "colors": {
+      "low_activity": {"r": 0, "g": 0, "b": 255},
+      "high_activity": {"r": 255, "g": 0, "b": 0},
+      "prediction": {"r": 255, "g": 255, "b": 0}
+    }
   }
 }
 ```
 
-### 批量处理数据
+### 性能优化
+
+**对于大量脑区（200+）：**
+1. 启用LOD（Level of Detail）系统
+2. 使用GPU Instancing
+3. 降低多边形数量
+4. 限制FPS（10-15）
+5. 使用活动阈值过滤低活动脑区
+
+**优化设置：**
+```csharp
+// 在BrainVisualization中
+public float cullingThreshold = 0.1f;  // 隐藏低活动脑区
+public bool useGPUInstancing = true;   // 启用GPU实例化
+public int maxVisibleRegions = 100;    // 限制可见脑区数量
+```
+
+## ❓ 常见问题
+
+### Q: 找不到Newtonsoft.Json类型
+
+**A:** 确保已安装Newtonsoft.Json包：
+```
+Window > Package Manager > + > Add package from git URL
+输入: com.unity.nuget.newtonsoft-json
+```
+
+### Q: WebSocket连接失败
+
+**A:** 检查：
+1. 后端服务器是否运行: `python unity_startup.py --demo`
+2. 端口是否正确（默认8765）
+3. 防火墙设置
+4. Unity Console中的错误信息
+
+### Q: JSON文件加载失败
+
+**A:** 确认：
+1. 文件在 `StreamingAssets/brain_states/` 目录
+2. 文件格式正确（JSON格式）
+3. 文件不为空
+4. 路径设置正确（相对于StreamingAssets）
+
+### Q: 没有FreeSurfer数据怎么办？
+
+**A:** 使用简单球体代替：
+1. 创建Sphere预制体
+2. 在BrainVisualization中Use Obj Models设为false
+3. 使用Region Prefab字段
+
+### Q: Cache文件转换失败
+
+**A:** 检查：
+1. Cache文件格式（.pt, .pth PyTorch格式）
+   - 正确格式：`eeg_data.pt`, `hetero_graphs.pt`
+   - 这些是训练过程自动生成的缓存文件
+2. 后端服务器正在运行
+3. 文件权限
+4. 查看Unity Console和Python日志
+
+### Q: 模型未找到
+
+**A:** 
+```bash
+# 方式1: 指定模型路径
+python unity_startup.py --model path/to/model.pt
+
+# 方式2: 使用演示模式
+python unity_startup.py --demo
+
+# 方式3: 将模型放在标准位置
+# - results/hetero_gnn_trained.pt
+# - test_file3/sub-XX/results/hetero_gnn_trained.pt
+```
+
+### Q: 场景中看不到脑区
+
+**A:** 检查：
+1. BrainManager GameObject是否激活
+2. BrainVisualization组件是否启用
+3. Region Prefab是否已赋值
+4. JSON数据是否加载成功（查看Console）
+5. Camera位置和方向
+
+### Q: 性能很慢/卡顿
+
+**A:** 优化建议：
+1. 减少可见脑区数量
+2. 降低OBJ模型多边形数
+3. 使用活动阈值过滤
+4. 降低动画FPS
+5. 启用GPU Instancing
+6. 使用LOD系统
+
+## 🔄 完整工作流示例
+
+### 示例1: 基础可视化（离线）
 
 ```bash
-# 批量处理多个被试的数据
-for subject in subject_01 subject_02 subject_03; do
+# 1. 生成Unity资源
+python setup_unity_project.py --auto-setup
+
+# 2. 转换数据
+python -m unity_integration.brain_state_exporter \
+    --data-dir unity_project/brain_data/cache \
+    --output unity_project/brain_data/model_output
+
+# 3. 安装到Unity
+python unity_package_installer.py --unity-project /path/to/UnityProject
+
+# 4. 复制数据
+cp unity_project/brain_data/model_output/*.json \
+    UnityProject/Assets/StreamingAssets/brain_states/
+
+# 5. 在Unity中运行
+```
+
+### 示例2: 实时预测（在线）
+
+```bash
+# 1. 启动后端
+python unity_startup.py --model results/model.pt
+
+# 2. 在Unity中
+# - 创建BrainManager with WebSocketClientImproved
+# - 运行场景
+# - 通过代码请求预测
+```
+
+### 示例3: 批量处理多个被试
+
+```bash
+# 批量转换多个被试数据
+for subject in sub-01 sub-02 sub-03; do
     python -m unity_integration.brain_state_exporter \
         --data-dir unity_project/brain_data/cache/$subject \
         --output unity_project/brain_data/model_output/$subject \
         --subject-id $subject
 done
+
+# 在Unity中动态切换被试数据
 ```
+
+## 📚 相关文档
+
+- **[Unity架构说明.md](Unity架构说明.md)** - 技术架构和设计原理
+- **[setup_unity_project.py](setup_unity_project.py)** - 项目初始化脚本
+- **[unity_startup.py](unity_startup.py)** - 后端服务启动脚本
+- **[unity_package_installer.py](unity_package_installer.py)** - Unity包安装工具
+- **[更新日志.md](docs/更新日志.md)** - 版本更新记录
+
+## 🆕 v2.5 更新内容
+
+### 主要改进
+- ✅ 新增 `WebSocketClientImproved.cs` - 改进的WebSocket客户端
+  - 使用HTTP/REST通信（WebGL兼容）
+  - 指数退避重连机制
+  - 完整的输入验证
+  - 请求ID追踪
+- ✅ 新增 `unity_package_installer.py` - 一键安装工具
+  - 自动验证Unity项目
+  - 自动安装所有脚本
+  - 创建Assembly Definition
+  - 生成使用指南
+- ✅ 改进 `unity_startup.py` - 更智能的模型查找
+  - 自动搜索模型文件
+  - 更好的错误处理
+  - 自动创建目录结构
+- ✅ 增强 `realtime_server.py` - 服务器端改进
+  - 完整的输入验证
+  - 更好的错误处理
+  - 详细的日志记录
+
+### Bug修复
+- ✅ 修复WebSocket客户端仅为stub的问题
+- ✅ 修复服务器端缺少输入验证
+- ✅ 修复硬编码路径问题
+- ✅ 修复CacheToJsonConverter与WebSocketClient不兼容
+
+### 文档更新
+- ✅ 完全重写使用指南
+- ✅ 添加详细的故障排除部分
+- ✅ 添加完整的工作流示例
+- ✅ 更新API使用说明
 
 ## 📞 获取帮助
 
-- **架构说明**: 查看 `Unity架构说明.md` 了解技术细节
 - **GitHub Issues**: https://github.com/sheinclotho/twinbrain/issues
-- **文档**: 查看项目中的其他文档
+- **文档**: 查看项目中的其他Markdown文档
+- **示例代码**: unity_examples/目录中的C#脚本
 
-## 🎉 完整示例
+## 🎉 总结
 
-```bash
-# 1. 生成项目（使用FreeSurfer）
-python setup_unity_project.py --freesurfer-dir my_freesurfer_data
+遵循本指南，您应该能够：
+1. ✅ 设置完整的Unity环境
+2. ✅ 生成和转换脑数据
+3. ✅ 创建3D脑可视化
+4. ✅ 使用实时预测功能
+5. ✅ 进行虚拟刺激模拟
 
-# 2. 处理数据
-python -m unity_integration.brain_state_exporter \
-    --data-dir unity_project/brain_data/cache \
-    --output unity_project/brain_data/model_output
-
-# 3. 启动后端（可选）
-python -m unity_integration.realtime_server
-
-# 4. 在Unity中导入并运行
-```
+**关键原则**：
+- 使用真实FreeSurfer数据（如有）
+- 基于实际脑数据处理
+- 优先使用自动化工具
+- 遵循标准文件夹结构
 
 ---
 
-**关键原则：**
-- ✅ 使用真实FreeSurfer数据
-- ✅ 基于实际脑数据处理
-- ✅ 不使用任何编造的示例数据
-- ✅ 两阶段工作流：构建 + 使用
-
-最后更新: 2024-02-05
+**版本**: 2.5  
+**更新日期**: 2024-02-14  
+**兼容**: Unity 2019.1+ | Python 3.8+

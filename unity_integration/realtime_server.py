@@ -143,28 +143,41 @@ class BrainVisualizationServer:
         """Process client request and return response."""
         request_type = request.get("type", "unknown")
         
-        if request_type == "get_state":
-            return await self.handle_get_state(request)
+        # Log the request
+        self.logger.info(f"Processing request: {request_type}")
         
-        elif request_type == "predict":
-            return await self.handle_predict(request)
-        
-        elif request_type == "simulate":
-            return await self.handle_simulate(request)
-        
-        elif request_type == "stream_start":
-            return await self.handle_stream_start(request)
-        
-        elif request_type == "stream_stop":
-            return {"type": "stream_stopped", "success": True}
-        
-        elif request_type == "convert_cache":
-            return await self.handle_convert_cache(request)
-        
-        else:
+        try:
+            if request_type == "get_state":
+                return await self.handle_get_state(request)
+            
+            elif request_type == "predict":
+                return await self.handle_predict(request)
+            
+            elif request_type == "simulate":
+                return await self.handle_simulate(request)
+            
+            elif request_type == "stream_start":
+                return await self.handle_stream_start(request)
+            
+            elif request_type == "stream_stop":
+                return {"type": "stream_stopped", "success": True}
+            
+            elif request_type == "convert_cache":
+                return await self.handle_convert_cache(request)
+            
+            else:
+                self.logger.warning(f"Unknown request type: {request_type}")
+                return {
+                    "type": "error",
+                    "success": False,
+                    "message": f"Unknown request type: {request_type}"
+                }
+        except Exception as e:
+            self.logger.error(f"Error processing {request_type}: {e}", exc_info=True)
             return {
                 "type": "error",
-                "message": f"Unknown request type: {request_type}"
+                "success": False,
+                "message": f"Server error: {str(e)}"
             }
     
     async def handle_get_state(self, request: Dict[str, Any]) -> Dict[str, Any]:
@@ -222,6 +235,15 @@ class BrainVisualizationServer:
         """Handle prediction request."""
         n_steps = request.get("n_steps", 10)
         
+        # Input validation
+        original_n_steps = n_steps
+        if not isinstance(n_steps, int) or n_steps <= 0 or n_steps > 1000:
+            self.logger.warning(f"Invalid n_steps: {n_steps}, using default 10")
+            n_steps = 10
+        
+        # Inform client if parameter was adjusted
+        parameter_adjusted = (n_steps != original_n_steps)
+        
         try:
             # Use ModelServer if available
             if self.model_server:
@@ -236,7 +258,9 @@ class BrainVisualizationServer:
                     "success": True,
                     "n_steps": n_steps,
                     "predictions": predictions,
-                    "saved_to": str(self.model_server.output_dir)
+                    "saved_to": str(self.model_server.output_dir),
+                    "parameter_adjusted": parameter_adjusted,
+                    "warning": "n_steps was adjusted to valid range" if parameter_adjusted else None
                 }
             
             # Fallback to simple prediction generation
@@ -270,7 +294,9 @@ class BrainVisualizationServer:
                 "type": "prediction",
                 "success": True,
                 "n_steps": n_steps,
-                "predictions": predictions
+                "predictions": predictions,
+                "parameter_adjusted": parameter_adjusted,
+                "warning": "n_steps was adjusted to valid range" if parameter_adjusted else None
             }
             
         except Exception as e:
@@ -284,6 +310,14 @@ class BrainVisualizationServer:
         """Handle stimulation simulation request."""
         stimulation = request.get("stimulation", {})
         
+        # Input validation
+        if not stimulation or not isinstance(stimulation, dict):
+            return {
+                "type": "error",
+                "success": False,
+                "message": "Invalid stimulation parameters"
+            }
+        
         try:
             import torch
             import numpy as np
@@ -295,7 +329,34 @@ class BrainVisualizationServer:
             frequency = stimulation.get("frequency", 10.0)
             duration = stimulation.get("duration", 20)
             
+            # Validate target regions
+            if not isinstance(target_regions, list) or len(target_regions) == 0:
+                return {
+                    "type": "error",
+                    "success": False,
+                    "message": "target_regions must be a non-empty list"
+                }
+            
+            # Validate and clamp values
+            amplitude = float(max(0.0, min(10.0, amplitude)))
+            frequency = float(max(0.1, min(100.0, frequency)))
+            duration = int(max(1, min(1000, duration)))
+            
+            # Filter valid region IDs
             n_regions = 200
+            valid_regions = [r for r in target_regions if isinstance(r, int) and 0 <= r < n_regions]
+            
+            if len(valid_regions) == 0:
+                return {
+                    "type": "error",
+                    "success": False,
+                    "message": f"No valid target regions (must be 0-{n_regions-1})"
+                }
+            
+            if len(valid_regions) < len(target_regions):
+                self.logger.warning(f"Filtered {len(target_regions) - len(valid_regions)} invalid region IDs")
+                target_regions = valid_regions
+            
             n_steps = 50
             
             # Use ModelServer if available
@@ -452,10 +513,10 @@ class BrainVisualizationServer:
             # Create output directory if it doesn't exist
             output_path.mkdir(parents=True, exist_ok=True)
             
-            # Find cache files
+            # Find cache files (only .pt/.pth files are the actual cache format)
             import glob
             cache_files = []
-            for ext in ['*.pkl', '*.npy', '*.npz', '*.pt', '*.pth']:
+            for ext in ['*.pt', '*.pth']:
                 cache_files.extend(glob.glob(str(cache_path / ext)))
             
             if not cache_files:
@@ -475,55 +536,49 @@ class BrainVisualizationServer:
                     # Load cache file
                     import torch
                     import numpy as np
-                    import pickle
                     
                     file_path = Path(cache_file)
                     ext = file_path.suffix
                     
-                    if ext == '.pkl':
-                        with open(file_path, 'rb') as f:
-                            data = pickle.load(f)
-                    elif ext in ['.npy', '.npz']:
-                        data = np.load(file_path, allow_pickle=True)
-                        if isinstance(data, np.lib.npyio.NpzFile):
-                            data = dict(data)
-                    elif ext in ['.pt', '.pth']:
-                        data = torch.load(file_path, map_location='cpu')
-                    else:
+                    # Only .pt files are supported (the actual cache format)
+                    if ext not in ['.pt', '.pth']:
+                        self.logger.warning(f"Skipping unsupported file format: {file_path.name}")
                         continue
                     
-                    # Convert to brain state JSON
-                    if self.exporter:
-                        # Extract fMRI/EEG data
-                        brain_activity = {}
-                        if isinstance(data, dict):
-                            if 'fmri' in data:
-                                brain_activity['fmri'] = torch.tensor(data['fmri']) if not isinstance(data['fmri'], torch.Tensor) else data['fmri']
-                            if 'eeg' in data:
-                                brain_activity['eeg'] = torch.tensor(data['eeg']) if not isinstance(data['eeg'], torch.Tensor) else data['eeg']
+                    self.logger.info(f"Loading cache file: {file_path.name}")
+                    data = torch.load(file_path, map_location='cpu', weights_only=False)
+                    
+                    # Determine cache file type and convert accordingly
+                    # Cache files are: eeg_data.pt or hetero_graphs.pt
+                    # Both are Dict[str, ...] where keys are task names
+                    
+                    if 'eeg_data' in file_path.stem:
+                        # eeg_data.pt format: Dict[task_name, Dict["on"|"off", HeteroData]]
+                        self.logger.info(f"Processing EEG data cache: {file_path.name}")
+                        converted = self._convert_eeg_data_cache(data, output_path, file_path.stem)
+                        converted_count += converted
                         
-                        if brain_activity:
-                            # Generate JSON output
-                            output_file = output_path / f"brain_state_{file_path.stem}.json"
-                            self.exporter.export_brain_state(
-                                brain_activity=brain_activity,
-                                output_path=output_file
-                            )
-                            converted_count += 1
-                            self.logger.info(f"Converted: {file_path.name} -> {output_file.name}")
+                    elif 'hetero_graphs' in file_path.stem:
+                        # hetero_graphs.pt format: Dict[task_name, List[HeteroData]]
+                        self.logger.info(f"Processing hetero graphs cache: {file_path.name}")
+                        converted = self._convert_hetero_graphs_cache(data, output_path, file_path.stem)
+                        converted_count += converted
+                        
                     else:
-                        # Fallback: simple JSON export
-                        output_file = output_path / f"brain_state_{file_path.stem}.json"
-                        # Create minimal JSON structure
-                        simple_json = {
-                            "version": "2.0",
-                            "timestamp": datetime.now().isoformat(),
-                            "source_file": file_path.name,
-                            "note": "Converted from cache without exporter"
-                        }
-                        with open(output_file, 'w') as f:
-                            json.dump(simple_json, f, indent=2)
-                        converted_count += 1
+                        # Unknown format - try to extract data generically
+                        self.logger.warning(f"Unknown cache format for {file_path.name}, attempting generic conversion")
+                        if isinstance(data, dict):
+                            for task_name, task_data in data.items():
+                                try:
+                                    brain_activity = self._extract_brain_activity_from_hetero(task_data)
+                                    if brain_activity:
+                                        output_file = output_path / f"brain_state_{file_path.stem}_{task_name}.json"
+                                        self._export_brain_state_json(brain_activity, output_file, task_name)
+                                        converted_count += 1
+                                except Exception as e:
+                                    error_msg = f"Error converting task {task_name}: {str(e)}"
+                                    self.logger.error(error_msg)
+                                    errors.append(error_msg)
                         
                 except Exception as e:
                     error_msg = f"Error processing {cache_file}: {str(e)}"
@@ -555,10 +610,192 @@ class BrainVisualizationServer:
                 "message": str(e)
             }
     
+    def _extract_brain_activity_from_hetero(self, hetero_data):
+        """
+        Extract brain activity tensors from HeteroData objects.
+        
+        Args:
+            hetero_data: Can be HeteroData, Dict, or List[HeteroData]
+            
+        Returns:
+            Dict with 'fmri' and/or 'eeg' tensors, or None if extraction fails
+        """
+        import torch
+        brain_activity = {}
+        
+        try:
+            # Handle different input types
+            if hasattr(hetero_data, 'node_types'):  # HeteroData object
+                # Extract from HeteroData
+                if 'fmri' in hetero_data.node_types:
+                    fmri_node = hetero_data['fmri']
+                    # x_seq is the typical attribute for sequence data
+                    if hasattr(fmri_node, 'x_seq'):
+                        brain_activity['fmri'] = fmri_node.x_seq
+                    elif hasattr(fmri_node, 'x'):
+                        brain_activity['fmri'] = fmri_node.x
+                
+                if 'eeg' in hetero_data.node_types:
+                    eeg_node = hetero_data['eeg']
+                    if hasattr(eeg_node, 'x_seq'):
+                        brain_activity['eeg'] = eeg_node.x_seq
+                    elif hasattr(eeg_node, 'x'):
+                        brain_activity['eeg'] = eeg_node.x
+                        
+            elif isinstance(hetero_data, dict):
+                # Dict with 'on'/'off' keys (EEG data format)
+                if 'on' in hetero_data:
+                    on_activity = self._extract_brain_activity_from_hetero(hetero_data['on'])
+                    if on_activity and 'eeg' in on_activity:
+                        brain_activity['eeg'] = on_activity['eeg']
+                        
+            elif isinstance(hetero_data, list) and len(hetero_data) > 0:
+                # List of HeteroData objects - use first one
+                first_activity = self._extract_brain_activity_from_hetero(hetero_data[0])
+                if first_activity:
+                    brain_activity = first_activity
+                    
+        except Exception as e:
+            self.logger.error(f"Error extracting brain activity: {e}")
+            return None
+        
+        return brain_activity if brain_activity else None
+    
+    def _convert_eeg_data_cache(self, data, output_path, base_name):
+        """
+        Convert eeg_data.pt cache file.
+        Format: Dict[task_name, Dict["on"|"off", HeteroData]]
+        """
+        converted = 0
+        
+        if not isinstance(data, dict):
+            self.logger.error(f"EEG data cache is not a dictionary: {type(data)}")
+            return 0
+        
+        for task_name, task_data in data.items():
+            try:
+                if not isinstance(task_data, dict):
+                    continue
+                
+                # Process "on" and "off" separately
+                for condition in ['on', 'off']:
+                    if condition not in task_data:
+                        continue
+                    
+                    hetero_data = task_data[condition]
+                    brain_activity = self._extract_brain_activity_from_hetero(hetero_data)
+                    
+                    if brain_activity:
+                        output_file = output_path / f"brain_state_{base_name}_{task_name}_{condition}.json"
+                        self._export_brain_state_json(
+                            brain_activity, 
+                            output_file, 
+                            f"{task_name}_{condition}"
+                        )
+                        converted += 1
+                        self.logger.info(f"  Converted: {task_name}/{condition} -> {output_file.name}")
+                        
+            except Exception as e:
+                self.logger.error(f"Error converting EEG task {task_name}: {e}")
+        
+        return converted
+    
+    def _convert_hetero_graphs_cache(self, data, output_path, base_name):
+        """
+        Convert hetero_graphs.pt cache file.
+        Format: Dict[task_name, List[HeteroData]]
+        """
+        converted = 0
+        
+        if not isinstance(data, dict):
+            self.logger.error(f"Hetero graphs cache is not a dictionary: {type(data)}")
+            return 0
+        
+        for task_name, graph_list in data.items():
+            try:
+                if not isinstance(graph_list, list) or len(graph_list) == 0:
+                    continue
+                
+                # Convert first few graphs (to avoid generating too many files)
+                max_graphs = min(10, len(graph_list))
+                for idx in range(max_graphs):
+                    hetero_data = graph_list[idx]
+                    brain_activity = self._extract_brain_activity_from_hetero(hetero_data)
+                    
+                    if brain_activity:
+                        output_file = output_path / f"brain_state_{base_name}_{task_name}_{idx:03d}.json"
+                        self._export_brain_state_json(
+                            brain_activity,
+                            output_file,
+                            f"{task_name}_frame{idx}"
+                        )
+                        converted += 1
+                        
+                if max_graphs < len(graph_list):
+                    self.logger.info(f"  Converted {max_graphs}/{len(graph_list)} graphs for task {task_name}")
+                else:
+                    self.logger.info(f"  Converted all {len(graph_list)} graphs for task {task_name}")
+                    
+            except Exception as e:
+                self.logger.error(f"Error converting hetero graph task {task_name}: {e}")
+        
+        return converted
+    
+    def _export_brain_state_json(self, brain_activity, output_file, subject_id):
+        """
+        Export brain activity to JSON file.
+        
+        Args:
+            brain_activity: Dict with 'fmri' and/or 'eeg' tensors
+            output_file: Path to save JSON
+            subject_id: Subject identifier for metadata
+        """
+        import torch
+        
+        try:
+            # Use exporter if available
+            if self.exporter:
+                self.exporter.export_brain_state(
+                    brain_activity=brain_activity,
+                    time_point=0,
+                    time_second=0.0,
+                    subject_id=subject_id,
+                    output_path=output_file
+                )
+            else:
+                # Fallback: create minimal JSON
+                json_data = {
+                    "version": "2.0",
+                    "timestamp": datetime.now().isoformat(),
+                    "subject_id": subject_id,
+                    "brain_state": {
+                        "time_point": 0,
+                        "regions": []
+                    }
+                }
+                
+                # Extract basic statistics for each modality
+                for modality, tensor in brain_activity.items():
+                    if isinstance(tensor, torch.Tensor):
+                        json_data[f"{modality}_shape"] = list(tensor.shape)
+                        json_data[f"{modality}_mean"] = float(tensor.mean())
+                        json_data[f"{modality}_std"] = float(tensor.std())
+                
+                with open(output_file, 'w') as f:
+                    json.dump(json_data, f, indent=2)
+                    
+        except Exception as e:
+            self.logger.error(f"Error exporting to JSON: {e}")
+            raise
+    
     async def handle_stream_start(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """Handle stream start request."""
         fps = request.get("fps", 10)
         duration = request.get("duration", 60)
+        
+        # Input validation
+        fps = int(max(1, min(60, fps)))
+        duration = int(max(1, min(3600, duration)))
         
         # Start streaming in background
         asyncio.create_task(self.stream_brain_activity(fps, duration))
