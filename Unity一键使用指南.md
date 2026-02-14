@@ -43,23 +43,14 @@ python setup_unity_project.py --auto-setup
 - ✅ Unity C#脚本（在 `Unity_Assets/Scripts/` 中）
 - ✅ 配置文件和说明文档
 
-**生成和复制的Unity C#脚本：**
-
-*自动生成的模板脚本:*
-- `BrainDataLoader.cs` - 数据加载器
-- `AnimationController.cs` - 动画控制
-- `ModelInterface.cs` - 模型接口
-
-*从unity_examples复制的功能脚本:*
+**Unity C#脚本（从 unity_examples/ 复制）：**
 - `WebSocketClient.cs` - WebSocket客户端（前后端通信）⭐
+- `BrainVisualization.cs` - 可视化控制器
 - `BrainDataStructures.cs` - 数据结构定义
 - `BrainConfigLoader.cs` - 配置加载器
-- `BrainVisualization.cs` - 可视化控制器
-- `CacheToJsonConverter.cs` - **Cache自动转JSON工具** ⭐⭐
 - `StimulationInput.cs` - 刺激输入UI
 - `TimelineController.cs` - 时间轴控制
-
-**注意**: 脚本是基础模板，根据需要自定义
+- `CacheToJsonConverter.cs` - **Cache自动转JSON工具** ⭐⭐
 
 ### 阶段2: 准备数据
 
@@ -124,26 +115,30 @@ python -m unity_integration.brain_state_exporter \
 
 #### 4. 设置场景
 
-1. **创建BrainManager**
+1. **创建BrainManager GameObject**
    - Hierarchy > Create Empty > "BrainManager"
 
-2. **添加组件**
-   - Add Component > Brain Data Loader（生成的脚本）
-     - Json Directory: `StreamingAssets/brain_states`
+2. **添加核心组件**
+   - Add Component > Brain Visualization（主可视化脚本）
+     - 配置Region Prefab（脑区预制体）
+     - 配置数据路径
+   - Add Component > Brain Config Loader（配置加载器）
      - Config Path: `StreamingAssets/unity_config.json`
-   - Add Component > Animation Controller（可选，用于时间序列）
+   - Add Component > WebSocket Client（后端通信，可选）
+     - Server URL: `http://localhost:8765`
+     - Auto Connect: ✓
 
 3. **创建脑区预制体**（如果有OBJ模型）
    - 从 `Assets/Models/` 选择一个OBJ文件
    - 拖到Scene中，调整大小
    - 拖到Project创建Prefab
-   - 赋值给Brain Data Loader的Region Prefab字段
+   - 赋值给Brain Visualization的Region Prefab字段
 
    如果没有OBJ模型，使用简单球体：
    - Hierarchy > 3D Object > Sphere
    - 缩放（Scale: 0.5, 0.5, 0.5）
    - 拖到Project创建Prefab命名为 `BrainRegion`
-   - 赋值给Brain Data Loader的Region Prefab字段
+   - 赋值给Brain Visualization的Region Prefab字段
 
 #### 5. 设置Cache自动转换UI（可选但推荐）⭐⭐
 
