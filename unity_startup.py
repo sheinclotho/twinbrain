@@ -185,8 +185,7 @@ async def start_server(
         state_dir.mkdir(parents=True, exist_ok=True)
         
         exporter = BrainStateExporter(
-            atlas_info=None,
-            output_dir=str(state_dir)
+            atlas_info=None
         )
         logger.info(f"✓ 状态导出器: {state_dir}")
         

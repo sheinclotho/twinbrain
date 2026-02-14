@@ -25,18 +25,19 @@ class BrainStateExporter:
     - Stimulation info (if applied)
     """
     
-    def __init__(self, atlas_info: Dict[str, Any], model_version: str = "v4"):
+    def __init__(self, atlas_info: Optional[Dict[str, Any]] = None, model_version: str = "v4"):
         """
         Initialize exporter.
         
         Args:
             atlas_info: Dictionary containing atlas information
                        {'regions': {id: {'label': str, 'xyz': [x,y,z]}, ...}}
+                       If None, default values will be used.
             model_version: Model version string
         """
-        self.atlas_info = atlas_info
+        self.atlas_info = atlas_info or {}
         self.model_version = model_version
-        self.regions_info = atlas_info.get('regions', {})
+        self.regions_info = self.atlas_info.get('regions', {})
     
     def export_brain_state(
         self,

@@ -21,7 +21,7 @@ namespace TwinBrain
     /// 4. 点击"转换Cache到JSON"按钮即可自动处理
     /// 
     /// 工作流程:
-    /// - 用户将cache文件(.pkl/.npy)放入 unity_project/brain_data/cache/
+    /// - 用户将cache文件(.pt PyTorch格式)放入 unity_project/brain_data/cache/
     /// - 点击按钮
     /// - 脚本调用后端 brain_state_exporter 接口
     /// - 后端自动读取cache文件，生成JSON到 model_output/
