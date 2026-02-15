@@ -380,216 +380,71 @@ class UnityPackageInstaller:
     
     def generate_usage_guide(self) -> bool:
         """
-        在Unity项目中生成使用指南
+        在Unity项目中生成简化的使用指南，指向主文档
         
         Returns:
             是否成功
         """
         logger.info("生成使用指南...")
         
-        guide_content = """# TwinBrain Unity 使用指南
+        guide_content = """# TwinBrain Unity 快速参考
 
-## ✅ 自动化安装完成的内容
-
-安装程序已经自动完成以下配置：
-
-1. **✅ C#脚本安装** - 所有TwinBrain脚本已复制到 `Assets/TwinBrain/Scripts/`
-2. **✅ 目录结构创建** - StreamingAssets和必要的子目录已创建
-3. **✅ Assembly Definition** - TwinBrain.Scripts.asmdef已生成
-4. **✅ 依赖包配置** - Newtonsoft.Json已添加到manifest.json（Unity将自动下载）
-5. **✅ 配置文件** - package.json和相关配置已生成
-
-## 🔧 需要手动完成的步骤
-
-### 步骤1: 打开Unity项目并等待包下载
-
-1. 在Unity Hub中打开项目
-2. Unity会自动检测manifest.json的更改并下载Newtonsoft.Json包
-3. 等待进度条完成（通常1-2分钟）
-4. 如果出现编译错误，请检查Console并确认Newtonsoft.Json已安装
-
-**验证安装**：
-- Window > Package Manager
-- 搜索 "Newtonsoft"
-- 应该看到 "Newtonsoft Json" 包已安装
-
-### 步骤2: 创建场景对象
-
-在Unity场景中手动创建以下对象：
-
-**A. 创建BrainManager GameObject：**
-1. `Hierarchy` > 右键 > `Create Empty`
-2. 命名为 `BrainManager`
-3. 添加以下组件（点击 Add Component 并搜索）：
-
-   **组件1: BrainVisualization** (主可视化组件)
-   - Json Path: `brain_states` (相对于StreamingAssets)
-   - Region Prefab: [需要创建，见下方]
-   - Load Sequence: ✓ (如果有多个JSON文件)
-   
-   **组件2: WebSocketClientImproved** (可选，用于实时通信)
-   - Server URL: `http://localhost:8765`
-   - Auto Connect: ✓
-   - Auto Reconnect: ✓
-   
-   **组件3: BrainConfigLoader** (可选，用于配置加载)
-   - Config Path: `config/unity_config.json`
-
-### 步骤3: 创建脑区可视化预制体
-
-你需要创建一个预制体来表示脑区。有两种方式：
-
-**方式A: 使用简单球体（推荐入门）**
-1. `Hierarchy` > `3D Object` > `Sphere`
-2. 设置Transform Scale: (0.5, 0.5, 0.5)
-3. 添加Material（可选）
-4. 拖拽到Project窗口创建Prefab，命名 `BrainRegion`
-5. 将此Prefab拖入BrainVisualization的 `Region Prefab` 字段
-6. 删除场景中的Sphere（保留Prefab即可）
-
-**方式B: 使用OBJ模型（如果有FreeSurfer数据）**
-1. 将OBJ文件导入Unity (Assets > Import New Asset)
-2. 拖拽OBJ到场景调整大小和材质
-3. 创建Prefab
-4. 赋值给BrainVisualization的 `Region Prefab`
-
-### 步骤4: 准备数据文件（可选UI转换）
-
-你需要将大脑状态JSON文件放入StreamingAssets目录。有两种方式：
-
-**方式A: 从Cache自动转换（推荐）**
-
-如果你已经有预处理的cache文件(.pt格式)：
-
-1. **创建转换UI（仅需一次）：**
-   - `Hierarchy` > `UI` > `Canvas`
-   - 右键Canvas > `UI` > `Button`，命名 "ConvertButton"，文本改为 "转换Cache"
-   - 右键Canvas > `UI` > `Text`，命名 "StatusText"
-   
-2. **添加转换器组件：**
-   - 选中Canvas
-   - `Add Component` > `Cache To Json Converter`
-   - 配置：
-     - Convert Button: 拖入ConvertButton
-     - Status Text: 拖入StatusText
-     - Backend Url: `http://localhost:8765`
-
-3. **使用转换功能：**
-   ```bash
-   # 先启动后端服务器
-   python unity_startup.py --demo
-   ```
-   - 在Unity中点击Play
-   - 点击 "转换Cache" 按钮
-   - 等待转换完成
-
-**方式B: 手动复制JSON文件**
-
-如果已经有JSON文件：
-```bash
-cp your_data/*.json UnityProject/Assets/StreamingAssets/brain_states/
-```
-
-### 步骤5: 运行场景
-
-1. 确保以上所有步骤完成
-2. 在Unity中打开场景
-3. 点击 **Play** 按钮
-4. 应该看到脑区出现并根据数据显示活动
-
-## 🎮 可选功能
-
-### 实时后端通信
-
-如果要使用实时预测功能：
-
-```bash
-# 启动后端服务器（需要训练好的模型）
-python unity_startup.py --model results/hetero_gnn_trained.pt
-
-# 或使用演示模式
-python unity_startup.py --demo
-```
-
-然后在Unity中通过WebSocketClientImproved组件使用：
-
-```csharp
-// 获取组件
-var wsClient = GetComponent<WebSocketClientImproved>();
-
-// 请求预测
-wsClient.RequestPrediction(10, (response) => {
-    Debug.Log("收到预测结果");
-});
-
-// 模拟刺激
-int[] regions = {10, 20, 30};
-wsClient.SimulateStimulation(regions, 0.5f, "sine", (response) => {
-    Debug.Log("收到刺激模拟结果");
-});
-```
-
-## ❓ 故障排除
-
-### Q: 找不到Newtonsoft.Json类型
-
-**A:** 
-1. 确认Package Manager中已安装（Window > Package Manager）
-2. 如果没有，手动添加：
-   - Package Manager > + > Add package from git URL
-   - 输入: `com.unity.nuget.newtonsoft-json`
-3. 重启Unity编辑器
-
-### Q: WebSocket连接失败
-
-**A:** 检查：
-1. 后端服务器是否运行: `python unity_startup.py --demo`
-2. 端口是否正确（默认8765）
-3. 防火墙设置
-4. Unity Console中的错误信息
-
-### Q: JSON文件加载失败
-
-**A:** 确认：
-1. 文件在 `StreamingAssets/brain_states/` 目录
-2. 文件格式正确（JSON格式）
-3. BrainVisualization的Json Path设置正确（应为相对路径，如 `brain_states`）
-4. 查看Unity Console的具体错误
-
-### Q: 场景中看不到脑区
-
-**A:** 检查：
-1. BrainManager GameObject是否激活
-2. BrainVisualization组件是否启用
-3. Region Prefab是否已赋值
-4. JSON数据是否加载成功（查看Console）
-5. Camera位置和方向（可能脑区在视野外）
-
-## 📚 更多帮助
-
-- **完整文档**: 查看项目中的 `Unity使用指南.md`
-- **GitHub Issues**: https://github.com/sheinclotho/twinbrain/issues
-
-## 🎯 总结
-
-**完全自动化的部分：**
-- ✅ 脚本安装
-- ✅ 目录创建
-- ✅ 依赖配置
-- ✅ Assembly Definition
-
-**需要手动的部分（无法自动化）：**
-- 🔧 在场景中创建GameObject和添加组件
-- 🔧 创建和配置预制体
-- 🔧 配置组件参数
-- 🔧 创建UI元素（可选）
-
-这是Unity编辑器的限制，脚本无法自动创建场景对象。这些手动步骤只需完成一次，之后可以保存为模板场景重复使用。
+> **完整文档**: 请查看TwinBrain仓库中的 **Unity使用指南.md**  
+> 本文件仅作为快速参考，详细说明请参阅主文档。
 
 ---
 
-**安装版本**: 2.5  
-**更新日期**: 2024-02-14
+## ✅ 自动化安装已完成
+
+安装程序已经自动完成：
+- ✅ C#脚本已复制到 `Assets/TwinBrain/Scripts/`
+- ✅ 目录结构已创建
+- ✅ Assembly Definition已生成
+- ✅ Newtonsoft.Json依赖已配置（Unity将自动下载）
+
+---
+
+## 🚀 下一步操作
+
+### 方法1: 使用自动化设置工具（推荐）
+
+1. 在Unity Hub中打开项目
+2. 等待Newtonsoft.Json包下载完成（1-2分钟）
+3. 在Unity菜单中选择：**TwinBrain → 自动设置场景**
+4. 点击"开始自动设置"按钮
+5. 完成！所有OBJ文件和组件将自动配置
+
+### 方法2: 手动配置
+
+如果需要手动配置，请参阅完整文档中的详细步骤。
+
+---
+
+## 📚 文档链接
+
+**主要文档** (在TwinBrain仓库根目录):
+- **Unity使用指南.md** - Unity集成完整指南（最新版本v4.0）
+- **UNIFIED_GUIDE.md** - 完整系统使用指南
+- **TROUBLESHOOTING.md** - 问题排查指南
+
+---
+
+## ❓ 常见问题快速解答
+
+**Q: 找不到Newtonsoft.Json类型？**
+A: 等待Unity自动下载完成，或在Package Manager中手动添加: `com.unity.nuget.newtonsoft-json`
+
+**Q: 场景中看不到脑区？**
+A: 使用自动设置工具（TwinBrain → 自动设置场景）自动配置所有对象
+
+**Q: OBJ文件无法拖动到场景？**
+A: 使用自动设置工具会自动导入并配置所有OBJ文件，无需手动拖动
+
+---
+
+**安装版本**: 2.6  
+**更新日期**: 2024-02-15  
+**请查阅 Unity使用指南.md 获取完整文档**
 """
         
         guide_file = self.assets_dir / "TwinBrain" / "USAGE_GUIDE.md"
@@ -597,7 +452,7 @@ wsClient.SimulateStimulation(regions, 0.5f, "sine", (response) => {
         try:
             with open(guide_file, 'w', encoding='utf-8') as f:
                 f.write(guide_content)
-            logger.info(f"✓ 创建: USAGE_GUIDE.md")
+            logger.info(f"✓ 创建: USAGE_GUIDE.md (指向主文档)")
             return True
         except Exception as e:
             logger.error(f"创建使用指南失败: {e}")
