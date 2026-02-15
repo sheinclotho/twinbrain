@@ -49,20 +49,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  # 完整安装（带FreeSurfer）- 一行命令完成所有步骤
-  python unity_one_click_install.py \\
-      --unity-project /path/to/UnityProject \\
-      --freesurfer-dir /path/to/freesurfer
+  # 完整安装（带FreeSurfer）
+  python unity_one_click_install.py --unity-project /path/to/UnityProject --freesurfer-dir /path/to/freesurfer
   
-  # 基础安装（无FreeSurfer）- 使用默认球体
-  python unity_one_click_install.py \\
-      --unity-project /path/to/UnityProject
+  # 基础安装（使用默认球体）
+  python unity_one_click_install.py --unity-project /path/to/UnityProject
   
-安装后在Unity中:
-  1. 打开Unity项目，等待包下载（1-2分钟）
-  2. 菜单: TwinBrain -> 自动设置场景
-  3. 点击"开始自动设置"按钮
-  4. 完成！无需手动配置200+个OBJ文件
+安装后在Unity中: TwinBrain -> 自动设置场景 -> 开始自动设置
         """
     )
     
@@ -102,19 +95,17 @@ def main():
     logger.info("TwinBrain Unity 一键完整安装")
     logger.info("="*80)
     logger.info(f"Unity项目: {unity_project}")
+    logger.info("")
     
-    # 步骤1: 生成Unity资源
-    logger.info("\n步骤1/3: 生成Unity资源...")
-    logger.info("-"*80)
-    
-    setup = setup_unity_project.UnityWorkflowSetup(output_base=args.output_dir)
+    # 生成并安装Unity资源（使用安静模式避免冗余输出）
+    setup = setup_unity_project.UnityWorkflowSetup(output_base=args.output_dir, verbose=False)
     
     # 创建文件夹结构
     setup.create_folder_structure()
     
     # 处理FreeSurfer文件（如果提供）
     if args.freesurfer_dir and args.freesurfer_dir.exists():
-        logger.info(f"使用FreeSurfer数据: {args.freesurfer_dir}")
+        logger.info(f"✓ 使用FreeSurfer数据: {args.freesurfer_dir}")
         lh_surface = args.freesurfer_dir / "lh.pial"
         rh_surface = args.freesurfer_dir / "rh.pial"
         lh_annot = list(args.freesurfer_dir.glob("lh.*.annot"))
@@ -132,10 +123,8 @@ def main():
     # 生成Unity脚本
     setup.generate_unity_scripts()
     
-    # 步骤2: 安装到Unity项目
-    logger.info("\n步骤2/3: 安装到Unity项目...")
-    logger.info("-"*80)
-    
+    # 安装到Unity项目
+    logger.info("✓ 安装到Unity项目...")
     installer = UnityPackageInstaller(unity_project)
     
     # 运行安装
@@ -143,10 +132,7 @@ def main():
         logger.error("安装失败")
         return 1
     
-    # 步骤3: 复制OBJ文件（如果存在）
-    logger.info("\n步骤3/3: 复制OBJ文件...")
-    logger.info("-"*80)
-    
+    # 复制OBJ文件（如果存在）
     if not setup.copy_obj_to_unity_project(unity_project):
         logger.warning("OBJ文件复制失败或跳过（如果没有FreeSurfer数据这是正常的）")
     
@@ -156,30 +142,14 @@ def main():
     logger.info("="*80)
     
     logger.info("\n📋 后续步骤:")
-    logger.info("")
-    logger.info("1. 在Unity Hub中打开项目")
-    logger.info("   - Unity会自动下载Newtonsoft.Json包（1-2分钟）")
-    logger.info("   - 等待进度条完成")
-    logger.info("")
-    logger.info("2. 在Unity中运行自动设置:")
-    logger.info("   - 菜单: TwinBrain -> 自动设置场景")
-    logger.info("   - 点击'开始自动设置'按钮")
-    logger.info("   - 等待完成（会自动配置所有OBJ文件）")
-    logger.info("")
-    logger.info("3. 完成！")
-    logger.info("   - 查看Hierarchy中的BrainManager对象")
-    logger.info("   - 点击Play测试")
-    logger.info("")
+    logger.info("1. 在Unity Hub中打开项目（Unity会自动下载依赖包）")
+    logger.info("2. 菜单: TwinBrain -> 自动设置场景")
+    logger.info("3. 点击'开始自动设置'按钮，完成后即可点击Play测试")
     
     if args.freesurfer_dir:
-        logger.info("✨ 提示: 已生成并复制OBJ文件到Unity，使用自动设置工具时")
-        logger.info("        会自动配置所有200+个OBJ文件，无需手动操作！")
-    else:
-        logger.info("ℹ️  提示: 未提供FreeSurfer数据，将使用默认球体作为脑区模型")
+        logger.info("\n✨ 已生成并复制OBJ文件，自动设置时会配置所有200+个OBJ文件")
     
-    logger.info("")
-    logger.info("📖 详细文档: Unity使用指南.md")
-    logger.info("")
+    logger.info("\n📖 详细文档: Unity使用指南.md\n")
     
     return 0
 
