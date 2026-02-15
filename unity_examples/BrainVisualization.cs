@@ -765,12 +765,19 @@ namespace TwinBrain
                     {
                         string[] predDirs = Directory.GetDirectories(predictionsDir);
                         
-                        // Sort by creation time, get newest
-                        System.Array.Sort(predDirs, (a, b) => 
-                            Directory.GetCreationTime(b).CompareTo(Directory.GetCreationTime(a)));
-                        
+                        // Cache creation times before sorting to avoid redundant file system calls
+                        var dirTimePairs = new System.Collections.Generic.List<System.Tuple<string, System.DateTime>>();
                         foreach (string dir in predDirs)
                         {
+                            dirTimePairs.Add(new System.Tuple<string, System.DateTime>(dir, Directory.GetCreationTime(dir)));
+                        }
+                        
+                        // Sort by creation time (newest first)
+                        dirTimePairs.Sort((a, b) => b.Item2.CompareTo(a.Item2));
+                        
+                        foreach (var pair in dirTimePairs)
+                        {
+                            string dir = pair.Item1;
                             if (!knownDirectories.Contains(dir))
                             {
                                 // Found new prediction directory
@@ -791,12 +798,19 @@ namespace TwinBrain
                     {
                         string[] stimDirs = Directory.GetDirectories(stimulationDir);
                         
-                        // Sort by creation time, get newest
-                        System.Array.Sort(stimDirs, (a, b) => 
-                            Directory.GetCreationTime(b).CompareTo(Directory.GetCreationTime(a)));
-                        
+                        // Cache creation times before sorting to avoid redundant file system calls
+                        var dirTimePairs = new System.Collections.Generic.List<System.Tuple<string, System.DateTime>>();
                         foreach (string dir in stimDirs)
                         {
+                            dirTimePairs.Add(new System.Tuple<string, System.DateTime>(dir, Directory.GetCreationTime(dir)));
+                        }
+                        
+                        // Sort by creation time (newest first)
+                        dirTimePairs.Sort((a, b) => b.Item2.CompareTo(a.Item2));
+                        
+                        foreach (var pair in dirTimePairs)
+                        {
+                            string dir = pair.Item1;
                             if (!knownDirectories.Contains(dir))
                             {
                                 // Found new stimulation directory

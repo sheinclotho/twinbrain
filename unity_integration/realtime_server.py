@@ -267,6 +267,8 @@ class BrainVisualizationServer:
                 )
                 
                 # Auto-save each prediction frame as JSON
+                # Note: Individual files are required for Unity to load frames separately
+                # and support streaming playback. Batching would prevent frame-by-frame access.
                 self.logger.info(f"Auto-saving {len(predictions)} prediction frames to {pred_output_dir}")
                 for idx, prediction in enumerate(predictions):
                     json_path = pred_output_dir / f"frame_{idx:04d}.json"
@@ -443,6 +445,8 @@ class BrainVisualizationServer:
                 )
                 
                 # Auto-save each frame as JSON
+                # Note: Individual files are required for Unity's frame-by-frame loading
+                # and to support progressive playback during long sequences.
                 self.logger.info(f"Auto-saving {len(responses)} stimulation frames to {stim_output_dir}")
                 for idx, response in enumerate(responses):
                     json_path = stim_output_dir / f"frame_{idx:04d}.json"
