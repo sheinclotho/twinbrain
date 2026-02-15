@@ -486,8 +486,8 @@ namespace TwinBrain.Editor
         }
         
         /// <summary>
-        /// Get preferred font with fallback to built-in Arial
-        /// Tries to load custom Aller font, falls back to Arial if not found
+        /// Get preferred font with fallback to built-in LegacyRuntime font
+        /// Tries to load custom Aller font, falls back to LegacyRuntime if not found
         /// </summary>
         Font GetPreferredFont()
         {
@@ -497,10 +497,10 @@ namespace TwinBrain.Editor
                 return customFont;
             }
             
-            // Fallback to built-in Arial
-            Debug.LogWarning("Aller font not found at Resources/Fonts/Aller, using built-in Arial. " +
+            // Fallback to built-in LegacyRuntime font (Arial.ttf is deprecated)
+            Debug.LogWarning("Aller font not found at Resources/Fonts/Aller, using built-in LegacyRuntime font. " +
                            "To use the Aller font, place it at Assets/Resources/Fonts/Aller in your Unity project.");
-            return Resources.GetBuiltinResource<Font>("Arial.ttf");
+            return Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         }
     }
 }
