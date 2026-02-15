@@ -276,7 +276,7 @@ class UnityPackageInstaller:
 
 ## 更多信息
 
-查看项目文档: Unity一键使用指南.md
+查看项目文档: Unity使用指南.md
 """
         
         readme_file = self.streaming_assets / "README.md"
@@ -567,8 +567,7 @@ wsClient.SimulateStimulation(regions, 0.5f, "sine", (response) => {
 
 ## 📚 更多帮助
 
-- **完整文档**: 查看项目中的 `Unity一键使用指南.md`
-- **架构说明**: 查看 `Unity架构说明.md`
+- **完整文档**: 查看项目中的 `Unity使用指南.md`
 - **GitHub Issues**: https://github.com/sheinclotho/twinbrain/issues
 
 ## 🎯 总结
@@ -675,7 +674,7 @@ wsClient.SimulateStimulation(regions, 0.5f, "sine", (response) => {
         logger.info("")
         logger.info("4. 查看详细使用说明")
         logger.info("   - Assets/TwinBrain/USAGE_GUIDE.md（Unity项目内）")
-        logger.info("   - Unity一键使用指南.md（TwinBrain仓库）")
+        logger.info("   - Unity使用指南.md（TwinBrain仓库）")
         logger.info("")
         logger.info("提示：手动步骤只需完成一次，之后可保存为场景模板重复使用")
         logger.info("")

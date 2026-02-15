@@ -178,7 +178,7 @@ def main():
         logger.info("ℹ️  提示: 未提供FreeSurfer数据，将使用默认球体作为脑区模型")
     
     logger.info("")
-    logger.info("📖 详细文档: Unity一键使用指南.md")
+    logger.info("📖 详细文档: Unity使用指南.md")
     logger.info("")
     
     return 0

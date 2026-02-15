@@ -506,7 +506,7 @@ python main.py train --config config/default.yaml --log-level DEBUG
 4. **查看文档**：
    - 使用指南：`使用指南.md`
    - 模型说明：`模型说明.md`
-   - Unity集成：`Unity一键使用指南.md`
+   - Unity集成：`Unity使用指南.md`
    - 格式规范：`MODEL_FORMAT.md`
 
 ---
