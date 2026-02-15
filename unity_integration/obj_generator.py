@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
 import torch
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class BrainOBJGenerator:
@@ -239,8 +242,6 @@ class BrainOBJGenerator:
             regions_to_process = [(int(rid), info) for rid, info in self.regions_info.items()]
         else:
             # No atlas info or positions provided - log warning
-            import logging
-            logger = logging.getLogger(__name__)
             logger.warning("No region positions or atlas info provided for OBJ export. Cannot generate brain region models.")
             return exported_files
         
@@ -283,7 +284,7 @@ class BrainOBJGenerator:
             # Write individual OBJ file
             output_path = output_dir / f"{prefix}_{region_id:04d}.obj"
             with open(output_path, 'w') as f:
-                # Write header
+                # Write header with metadata
                 f.write("# TwinBrain Brain Region (Individual Export)\n")
                 f.write(f"# Generated: {datetime.now().isoformat()}\n")
                 f.write(f"# Region ID: {region_id}\n")
@@ -294,6 +295,8 @@ class BrainOBJGenerator:
                     f.write(f"# Activity: {activity_norm:.3f}\n")
                 f.write(f"# NOTE: Coordinates are in FreeSurfer space (mm)\n")
                 f.write(f"# Unity import: Set scale to 0.01 to convert to Unity units\n")
+                f.write(f"\n")
+                # Object and group declarations
                 f.write(f"o region_{region_id}\n")
                 f.write(f"g region_{region_id}\n\n")
                 
