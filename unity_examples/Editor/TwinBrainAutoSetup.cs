@@ -287,7 +287,7 @@ namespace TwinBrain.Editor
             title.transform.SetParent(panel.transform, false);
             var titleText = title.AddComponent<UnityEngine.UI.Text>();
             titleText.text = "虚拟刺激控制";
-            titleText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            titleText.font = GetPreferredFont();
             titleText.fontSize = 18;
             titleText.color = Color.white;
             titleText.alignment = TextAnchor.MiddleCenter;
@@ -311,7 +311,7 @@ namespace TwinBrain.Editor
             placeholder.transform.SetParent(inputFieldObj.transform, false);
             var placeholderText = placeholder.AddComponent<UnityEngine.UI.Text>();
             placeholderText.text = "输入目标脑区ID (逗号分隔)";
-            placeholderText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            placeholderText.font = GetPreferredFont();
             placeholderText.fontSize = 12;
             placeholderText.color = new Color(0.5f, 0.5f, 0.5f);
             placeholderText.fontStyle = FontStyle.Italic;
@@ -320,7 +320,7 @@ namespace TwinBrain.Editor
             textObj.transform.SetParent(inputFieldObj.transform, false);
             var textComponent = textObj.AddComponent<UnityEngine.UI.Text>();
             textComponent.text = "";
-            textComponent.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            textComponent.font = GetPreferredFont();
             textComponent.fontSize = 12;
             textComponent.color = Color.black;
             textComponent.supportRichText = false;
@@ -379,7 +379,7 @@ namespace TwinBrain.Editor
             amplitudeTextObj.transform.SetParent(panel.transform, false);
             var amplitudeText = amplitudeTextObj.AddComponent<UnityEngine.UI.Text>();
             amplitudeText.text = "Amplitude: 1.00";
-            amplitudeText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            amplitudeText.font = GetPreferredFont();
             amplitudeText.fontSize = 12;
             amplitudeText.color = Color.white;
             
@@ -418,7 +418,7 @@ namespace TwinBrain.Editor
             buttonTextObj.transform.SetParent(buttonObj.transform, false);
             var buttonText = buttonTextObj.AddComponent<UnityEngine.UI.Text>();
             buttonText.text = "应用刺激";
-            buttonText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            buttonText.font = GetPreferredFont();
             buttonText.fontSize = 14;
             buttonText.color = Color.white;
             buttonText.alignment = TextAnchor.MiddleCenter;
@@ -434,7 +434,7 @@ namespace TwinBrain.Editor
             statusTextObj.transform.SetParent(panel.transform, false);
             var statusText = statusTextObj.AddComponent<UnityEngine.UI.Text>();
             statusText.text = "Ready";
-            statusText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            statusText.font = GetPreferredFont();
             statusText.fontSize = 10;
             statusText.color = Color.yellow;
             statusText.alignment = TextAnchor.MiddleCenter;
@@ -483,6 +483,24 @@ namespace TwinBrain.Editor
             mainCamera.backgroundColor = Color.black;
             
             Debug.Log("摄像机配置完成");
+        }
+        
+        /// <summary>
+        /// Get preferred font with fallback to built-in Arial
+        /// Tries to load custom Aller font, falls back to Arial if not found
+        /// </summary>
+        Font GetPreferredFont()
+        {
+            Font customFont = Resources.Load<Font>("Fonts/Aller");
+            if (customFont != null)
+            {
+                return customFont;
+            }
+            
+            // Fallback to built-in Arial
+            Debug.LogWarning("Aller font not found at Resources/Fonts/Aller, using built-in Arial. " +
+                           "To use the Aller font, place it at Assets/Resources/Fonts/Aller in your Unity project.");
+            return Resources.GetBuiltinResource<Font>("Arial.ttf");
         }
     }
 }

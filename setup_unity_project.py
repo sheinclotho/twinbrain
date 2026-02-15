@@ -1355,8 +1355,8 @@ PORT = 8765  # 改为其他端口
 ## 📞 支持
 
 如有问题，请查看：
-- 项目主README: `../README_CN.md`
-- Unity文档: `../docs/Unity工作流说明.md`
+- 项目主README: `../README.md`
+- Unity文档: `../Unity使用指南.md`
 - GitHub Issues
 
 ---
@@ -1525,7 +1525,7 @@ PORT = 8765  # 改为其他端口
 
 ## 更多信息
 
-查看项目文档: Unity使用指南_v3.md
+查看项目文档: Unity使用指南.md
 """
         
         readme_file = dest_obj_dir / "README.md"
