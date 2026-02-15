@@ -95,7 +95,7 @@ def main():
     logger.info("TwinBrain Unity 一键完整安装")
     logger.info("="*80)
     logger.info(f"Unity项目: {unity_project}")
-    logger.info("")  # Blank line for readability
+    logger.info("")
     
     # 生成并安装Unity资源（使用安静模式避免冗余输出）
     setup = setup_unity_project.UnityWorkflowSetup(output_base=args.output_dir, verbose=False)
