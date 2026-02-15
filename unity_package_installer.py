@@ -147,8 +147,8 @@ class UnityPackageInstaller:
         # 创建目标目录
         self.scripts_dir.mkdir(parents=True, exist_ok=True)
         
-        # 获取所有C#脚本
-        script_files = list(self.source_scripts.glob("*.cs"))
+        # 获取所有C#脚本（排除Editor子目录）
+        script_files = [f for f in self.source_scripts.glob("*.cs") if f.is_file()]
         
         if len(script_files) == 0:
             logger.error("未找到C#脚本文件")
@@ -166,7 +166,23 @@ class UnityPackageInstaller:
             except Exception as e:
                 logger.error(f"  ✗ 安装失败 {script_file.name}: {e}")
         
-        logger.info(f"✓ 成功安装 {installed_count}/{len(script_files)} 个脚本")
+        # 安装Editor脚本
+        editor_source = self.source_scripts / "Editor"
+        if editor_source.exists() and editor_source.is_dir():
+            editor_dest = self.scripts_dir / "Editor"
+            editor_dest.mkdir(parents=True, exist_ok=True)
+            
+            editor_scripts = list(editor_source.glob("*.cs"))
+            for editor_script in editor_scripts:
+                dest_file = editor_dest / editor_script.name
+                try:
+                    shutil.copy2(editor_script, dest_file)
+                    logger.info(f"  ✓ 安装Editor脚本: {editor_script.name}")
+                    installed_count += 1
+                except Exception as e:
+                    logger.error(f"  ✗ 安装Editor脚本失败 {editor_script.name}: {e}")
+        
+        logger.info(f"✓ 成功安装 {installed_count} 个脚本")
         return installed_count > 0
     
     def create_assembly_definition(self) -> bool:

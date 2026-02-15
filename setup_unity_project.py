@@ -1419,6 +1419,124 @@ PORT = 8765  # 改为其他端口
         logger.info("  5. 运行并测试！")
         
         logger.info(f"\n📖 详细文档: {readme_rel}")
+    
+    def copy_obj_to_unity_project(self, unity_project_path: Path) -> bool:
+        """
+        复制生成的OBJ文件到Unity项目的StreamingAssets/OBJ/目录
+        
+        Args:
+            unity_project_path: Unity项目根目录路径
+            
+        Returns:
+            是否成功
+        """
+        logger.info("\n" + "="*80)
+        logger.info("复制OBJ文件到Unity项目")
+        logger.info("="*80)
+        
+        # 验证Unity项目
+        if not unity_project_path.exists():
+            logger.error(f"Unity项目不存在: {unity_project_path}")
+            return False
+        
+        if not (unity_project_path / "Assets").exists():
+            logger.error(f"无效的Unity项目（缺少Assets目录）: {unity_project_path}")
+            return False
+        
+        # 检查源OBJ目录
+        source_obj_dir = self.unity_assets_dir / "obj"
+        if not source_obj_dir.exists():
+            logger.warning("未找到OBJ文件目录，跳过复制")
+            logger.info("  提示: 使用 --freesurfer-dir 参数生成OBJ文件")
+            return True  # 不是错误，只是没有OBJ文件
+        
+        obj_files = list(source_obj_dir.glob("*.obj"))
+        if not obj_files:
+            logger.warning("OBJ目录为空，跳过复制")
+            return True
+        
+        # 创建目标目录
+        dest_obj_dir = unity_project_path / "Assets" / "StreamingAssets" / "OBJ"
+        dest_obj_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 复制OBJ文件
+        logger.info(f"从: {source_obj_dir}")
+        logger.info(f"到:   {dest_obj_dir}")
+        logger.info(f"")
+        logger.info(f"复制 {len(obj_files)} 个OBJ文件...")
+        
+        copied_count = 0
+        failed_count = 0
+        
+        for obj_file in obj_files:
+            dest_file = dest_obj_dir / obj_file.name
+            try:
+                shutil.copy2(obj_file, dest_file)
+                copied_count += 1
+                if copied_count % 50 == 0:  # 每50个文件报告一次进度
+                    logger.info(f"  已复制 {copied_count}/{len(obj_files)} 个文件...")
+            except Exception as e:
+                logger.error(f"  ✗ 复制失败 {obj_file.name}: {e}")
+                failed_count += 1
+        
+        if copied_count > 0:
+            logger.info(f"✓ 成功复制 {copied_count} 个OBJ文件")
+        
+        if failed_count > 0:
+            logger.warning(f"⚠ {failed_count} 个文件复制失败")
+        
+        if copied_count == 0:
+            logger.error("没有文件被复制")
+            return False
+        
+        # 创建README
+        readme_content = f"""# TwinBrain 3D脑区模型
+
+本目录包含 {copied_count} 个独立的脑区OBJ模型文件。
+
+## 文件说明
+
+- 每个文件代表一个独立的脑区
+- 文件命名格式: region_XXXX.obj (XXXX为脑区编号)
+- 这些文件由FreeSurfer数据自动生成
+
+## 使用方法
+
+### 方法1: 单个代表模型
+1. 选择任意一个OBJ文件（如 region_0001.obj）
+2. 拖拽到Hierarchy创建实例
+3. 调整大小和材质
+4. 创建Prefab
+5. 赋值给BrainVisualization组件的Region Prefab字段
+
+### 方法2: 动态加载所有模型（推荐）
+1. 在BrainVisualization组件中:
+   - 勾选 "Use Obj Models"
+   - 设置 "Obj Directory" 为 "OBJ"
+2. 运行时会自动加载所有region_XXXX.obj文件
+
+## 性能优化
+
+如果遇到性能问题（200个OBJ可能较重）：
+1. 减少多边形数量（在FreeSurfer导出时调整）
+2. 使用LOD (Level of Detail) 系统
+3. 启用GPU Instancing
+4. 使用简单球体代替（用于快速原型）
+
+## 更多信息
+
+查看项目文档: Unity使用指南_v3.md
+"""
+        
+        readme_file = dest_obj_dir / "README.md"
+        try:
+            with open(readme_file, 'w', encoding='utf-8') as f:
+                f.write(readme_content)
+            logger.info(f"✓ 创建说明文件: README.md")
+        except Exception as e:
+            logger.warning(f"创建README失败: {e}")
+        
+        return True
 
 
 def main():
@@ -1459,6 +1577,12 @@ def main():
         help='训练模型文件路径'
     )
     
+    parser.add_argument(
+        '--unity-project',
+        type=Path,
+        help='Unity项目路径（可选）。如果提供，将自动复制OBJ文件到StreamingAssets/OBJ/'
+    )
+    
     args = parser.parse_args()
     
     # 创建设置管理器
@@ -1496,6 +1620,13 @@ def main():
         
         # 步骤5: 生成文档
         setup.generate_documentation()
+        
+        # 步骤6: 如果提供了Unity项目路径，复制OBJ文件
+        if args.unity_project:
+            if setup.copy_obj_to_unity_project(args.unity_project):
+                logger.info("✓ OBJ文件已复制到Unity项目")
+            else:
+                logger.warning("⚠ OBJ文件复制失败或跳过")
         
         # 打印摘要
         setup.print_summary()

@@ -69,7 +69,7 @@ python setup_unity_project.py --auto-setup --output-dir my_unity_assets
 unity_project/
 ├── freesurfer_files/         # FreeSurfer数据存放
 ├── brain_data/
-│   ├── cache/                # 预处理缓存(.pkl/.npy)
+│   ├── cache/                # 预处理缓存(.pt/.pth PyTorch格式)
 │   ├── model_output/         # JSON状态文件(Unity读取)
 │   └── original/             # 原始数据
 ├── Unity_Assets/
@@ -403,7 +403,7 @@ FreeSurfer数据
     ↓ [setup_unity_project.py]
 OBJ 3D模型
     ↓
-预处理的脑数据 (.pkl/.npy)
+预处理的脑数据 (.pt/.pth PyTorch格式)
     ↓ [brain_state_exporter.py]
 JSON状态文件
     ↓ [复制到StreamingAssets]
@@ -730,7 +730,7 @@ FreeSurfer数据
     ↓ [setup_unity_project.py]
 OBJ 3D模型
     ↓
-预处理的脑数据 (.pkl/.npy)
+预处理的脑数据 (.pt/.pth PyTorch格式)
     ↓ [brain_state_exporter.py]
 JSON状态文件
     ↓ [Unity加载]
