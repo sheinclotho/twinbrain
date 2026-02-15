@@ -158,7 +158,7 @@ namespace TwinBrain
             
             // 目前统一使用HTTP API进行转换
             // WebSocket版本适用于真正的双向通信场景
-            success = yield return StartCoroutine(ConvertViaHttp(cachePath));
+            yield return StartCoroutine(ConvertViaHttp(cachePath, result => success = result));
             
             if (success)
             {
@@ -181,7 +181,7 @@ namespace TwinBrain
         /// <summary>
         /// 通过WebSocket调用后端转换
         /// </summary>
-        private IEnumerator ConvertViaWebSocket(string cachePath)
+        private IEnumerator ConvertViaWebSocket(string cachePath, System.Action<bool> callback)
         {
             UpdateStatus("通过WebSocket请求转换...", Color.cyan);
             
@@ -196,10 +196,6 @@ namespace TwinBrain
             string requestJson = JsonConvert.SerializeObject(request);
             
             // 发送请求（需要WebSocketClient支持异步响应）
-            bool responseReceived = false;
-            string responseData = null;
-            
-            // 注册回调（如果WebSocketClient支持）
             // 这里简化处理，实际需要WebSocketClient提供回调机制
             
             yield return new WaitForSeconds(1f);
@@ -218,7 +214,8 @@ namespace TwinBrain
                 {
                     UpdateProgress(0.7f + (elapsed / timeout) * 0.3f);
                     yield return new WaitForSeconds(2f); // 等待所有文件写入完成
-                    yield return true;
+                    callback(true);
+                    yield break;
                 }
                 
                 UpdateProgress(0.3f + (elapsed / timeout) * 0.4f);
@@ -226,13 +223,14 @@ namespace TwinBrain
             
             // 超时
             UpdateStatus("转换超时。请检查后端日志。", Color.red);
-            yield return false;
+            callback(false);
+            yield break;
         }
         
         /// <summary>
         /// 通过HTTP API调用后端转换
         /// </summary>
-        private IEnumerator ConvertViaHttp(string cachePath)
+        private IEnumerator ConvertViaHttp(string cachePath, System.Action<bool> callback)
         {
             UpdateStatus("通过HTTP请求转换...", Color.cyan);
             
@@ -273,27 +271,31 @@ namespace TwinBrain
                         
                         if (responseObj.ContainsKey("success") && (bool)responseObj["success"])
                         {
-                            yield return true;
+                            callback(true);
+                            yield break;
                         }
                         else
                         {
                             string error = responseObj.ContainsKey("error") ? responseObj["error"].ToString() : "Unknown error";
                             UpdateStatus("后端错误: " + error, Color.red);
-                            yield return false;
+                            callback(false);
+                            yield break;
                         }
                     }
                     catch (System.Exception e)
                     {
                         UpdateStatus("解析响应失败: " + e.Message, Color.red);
                         Debug.LogError("Response parsing error: " + e.ToString());
-                        yield return false;
+                        callback(false);
+                        yield break;
                     }
                 }
                 else
                 {
                     UpdateStatus("HTTP请求失败: " + www.error, Color.red);
                     Debug.LogError("HTTP error: " + www.error);
-                    yield return false;
+                    callback(false);
+                    yield break;
                 }
             }
         }
