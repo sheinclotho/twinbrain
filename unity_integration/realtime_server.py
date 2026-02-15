@@ -232,7 +232,12 @@ class BrainVisualizationServer:
             }
     
     async def handle_predict(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle prediction request."""
+        """
+        Handle prediction request with automatic JSON export.
+        
+        Automatically saves prediction results to output_dir/predictions/
+        for Unity to auto-load.
+        """
         n_steps = request.get("n_steps", 10)
         
         # Input validation
@@ -245,6 +250,14 @@ class BrainVisualizationServer:
         parameter_adjusted = (n_steps != original_n_steps)
         
         try:
+            # Create timestamped output directory for predictions
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_base = Path(self.model_server.output_dir if self.model_server else "unity_project/brain_data/model_output")
+            pred_output_dir = output_base / "predictions" / f"pred_{timestamp}"
+            pred_output_dir.mkdir(parents=True, exist_ok=True)
+            
+            self.logger.info(f"Prediction output directory: {pred_output_dir}")
+            
             # Use ModelServer if available
             if self.model_server:
                 self.logger.info(f"Using ModelServer for prediction ({n_steps} steps)")
@@ -253,12 +266,37 @@ class BrainVisualizationServer:
                     subject_id="prediction"
                 )
                 
+                # Auto-save each prediction frame as JSON
+                # Note: Individual files are required for Unity to load frames separately
+                # and support streaming playback. Batching would prevent frame-by-frame access.
+                self.logger.info(f"Auto-saving {len(predictions)} prediction frames to {pred_output_dir}")
+                for idx, prediction in enumerate(predictions):
+                    json_path = pred_output_dir / f"frame_{idx:04d}.json"
+                    with open(json_path, 'w', encoding='utf-8') as f:
+                        json.dump(prediction, f, indent=2)
+                
+                # Create sequence index
+                index_data = {
+                    "type": "prediction_sequence",
+                    "timestamp": timestamp,
+                    "n_frames": len(predictions),
+                    "output_dir": str(pred_output_dir),
+                    "files": [f"frame_{i:04d}.json" for i in range(len(predictions))]
+                }
+                index_path = pred_output_dir / "sequence_index.json"
+                with open(index_path, 'w', encoding='utf-8') as f:
+                    json.dump(index_data, f, indent=2)
+                
+                self.logger.info(f"✓ Prediction results auto-saved to: {pred_output_dir}")
+                
                 return {
                     "type": "prediction",
                     "success": True,
                     "n_steps": n_steps,
                     "predictions": predictions,
-                    "saved_to": str(self.model_server.output_dir),
+                    "saved_to": str(pred_output_dir),
+                    "index_file": str(index_path),
+                    "auto_saved": True,
                     "parameter_adjusted": parameter_adjusted,
                     "warning": "n_steps was adjusted to valid range" if parameter_adjusted else None
                 }
@@ -289,12 +327,34 @@ class BrainVisualizationServer:
                         subject_id="prediction"
                     )
                     predictions.append(brain_state)
+                    
+                    # Auto-save to file
+                    json_path = pred_output_dir / f"frame_{t:04d}.json"
+                    with open(json_path, 'w', encoding='utf-8') as f:
+                        json.dump(brain_state, f, indent=2)
+            
+            # Create sequence index
+            index_data = {
+                "type": "prediction_sequence",
+                "timestamp": timestamp,
+                "n_frames": len(predictions),
+                "output_dir": str(pred_output_dir),
+                "files": [f"frame_{i:04d}.json" for i in range(len(predictions))]
+            }
+            index_path = pred_output_dir / "sequence_index.json"
+            with open(index_path, 'w', encoding='utf-8') as f:
+                json.dump(index_data, f, indent=2)
+            
+            self.logger.info(f"✓ Prediction results auto-saved to: {pred_output_dir}")
             
             return {
                 "type": "prediction",
                 "success": True,
                 "n_steps": n_steps,
                 "predictions": predictions,
+                "saved_to": str(pred_output_dir),
+                "index_file": str(index_path),
+                "auto_saved": True,
                 "parameter_adjusted": parameter_adjusted,
                 "warning": "n_steps was adjusted to valid range" if parameter_adjusted else None
             }
@@ -307,7 +367,12 @@ class BrainVisualizationServer:
             }
     
     async def handle_simulate(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle stimulation simulation request."""
+        """
+        Handle stimulation simulation request with automatic JSON export.
+        
+        Automatically saves stimulation results to output_dir/stimulation/
+        for Unity to auto-load.
+        """
         stimulation = request.get("stimulation", {})
         
         # Input validation
@@ -359,6 +424,14 @@ class BrainVisualizationServer:
             
             n_steps = 50
             
+            # Create timestamped output directory for this stimulation
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_base = Path(self.model_server.output_dir if self.model_server else "unity_project/brain_data/model_output")
+            stim_output_dir = output_base / "stimulation" / f"stim_{timestamp}"
+            stim_output_dir.mkdir(parents=True, exist_ok=True)
+            
+            self.logger.info(f"Stimulation output directory: {stim_output_dir}")
+            
             # Use ModelServer if available
             if self.model_server:
                 self.logger.info(f"Using ModelServer for stimulation simulation")
@@ -371,13 +444,45 @@ class BrainVisualizationServer:
                     subject_id="stimulation"
                 )
                 
+                # Auto-save each frame as JSON
+                # Note: Individual files are required for Unity's frame-by-frame loading
+                # and to support progressive playback during long sequences.
+                self.logger.info(f"Auto-saving {len(responses)} stimulation frames to {stim_output_dir}")
+                for idx, response in enumerate(responses):
+                    json_path = stim_output_dir / f"frame_{idx:04d}.json"
+                    with open(json_path, 'w', encoding='utf-8') as f:
+                        json.dump(response, f, indent=2)
+                
+                # Create sequence index for Unity auto-loading
+                index_data = {
+                    "type": "stimulation_sequence",
+                    "timestamp": timestamp,
+                    "stimulation_params": {
+                        "target_regions": target_regions,
+                        "amplitude": amplitude,
+                        "pattern": pattern,
+                        "frequency": frequency,
+                        "duration": duration
+                    },
+                    "n_frames": len(responses),
+                    "output_dir": str(stim_output_dir),
+                    "files": [f"frame_{i:04d}.json" for i in range(len(responses))]
+                }
+                index_path = stim_output_dir / "sequence_index.json"
+                with open(index_path, 'w', encoding='utf-8') as f:
+                    json.dump(index_data, f, indent=2)
+                
+                self.logger.info(f"✓ Stimulation results auto-saved to: {stim_output_dir}")
+                
                 return {
                     "type": "simulation",
                     "success": True,
                     "n_steps": len(responses),
                     "stimulation": stimulation,
                     "responses": responses,
-                    "saved_to": str(self.model_server.output_dir)
+                    "saved_to": str(stim_output_dir),
+                    "index_file": str(index_path),
+                    "auto_saved": True
                 }
             
             # Fallback to using simulator
@@ -403,7 +508,7 @@ class BrainVisualizationServer:
                     n_steps=n_steps
                 )
                 
-                # Export trajectory as sequence
+                # Export trajectory as sequence with auto-save
                 responses = []
                 for t, state in enumerate(trajectory):
                     if len(state.shape) == 2:
@@ -430,6 +535,33 @@ class BrainVisualizationServer:
                             stimulation=stim_info
                         )
                         responses.append(brain_state)
+                        
+                        # Auto-save to file
+                        json_path = stim_output_dir / f"frame_{t:04d}.json"
+                        with open(json_path, 'w', encoding='utf-8') as f:
+                            json.dump(brain_state, f, indent=2)
+                
+                # Create sequence index
+                index_data = {
+                    "type": "stimulation_sequence",
+                    "timestamp": timestamp,
+                    "stimulation_params": {
+                        "target_regions": target_regions,
+                        "amplitude": amplitude,
+                        "pattern": pattern,
+                        "frequency": frequency,
+                        "duration": duration
+                    },
+                    "n_frames": len(responses),
+                    "output_dir": str(stim_output_dir),
+                    "files": [f"frame_{i:04d}.json" for i in range(len(responses))],
+                    "metrics": metrics
+                }
+                index_path = stim_output_dir / "sequence_index.json"
+                with open(index_path, 'w', encoding='utf-8') as f:
+                    json.dump(index_data, f, indent=2)
+                
+                self.logger.info(f"✓ Stimulation results auto-saved to: {stim_output_dir}")
                 
                 return {
                     "type": "simulation",
@@ -437,7 +569,10 @@ class BrainVisualizationServer:
                     "n_steps": n_steps,
                     "stimulation": stimulation,
                     "responses": responses,
-                    "metrics": metrics
+                    "metrics": metrics,
+                    "saved_to": str(stim_output_dir),
+                    "index_file": str(index_path),
+                    "auto_saved": True
                 }
             else:
                 # Simple simulation without simulator
@@ -464,13 +599,42 @@ class BrainVisualizationServer:
                             stimulation=stim_info
                         )
                         responses.append(brain_state)
+                        
+                        # Auto-save to file
+                        json_path = stim_output_dir / f"frame_{t:04d}.json"
+                        with open(json_path, 'w', encoding='utf-8') as f:
+                            json.dump(brain_state, f, indent=2)
+                
+                # Create sequence index
+                index_data = {
+                    "type": "stimulation_sequence",
+                    "timestamp": timestamp,
+                    "stimulation_params": {
+                        "target_regions": target_regions,
+                        "amplitude": amplitude,
+                        "pattern": pattern,
+                        "frequency": frequency,
+                        "duration": duration
+                    },
+                    "n_frames": len(responses),
+                    "output_dir": str(stim_output_dir),
+                    "files": [f"frame_{i:04d}.json" for i in range(len(responses))]
+                }
+                index_path = stim_output_dir / "sequence_index.json"
+                with open(index_path, 'w', encoding='utf-8') as f:
+                    json.dump(index_data, f, indent=2)
+                
+                self.logger.info(f"✓ Stimulation results auto-saved to: {stim_output_dir}")
                 
                 return {
                     "type": "simulation",
                     "success": True,
                     "n_steps": n_steps,
                     "stimulation": stimulation,
-                    "responses": responses
+                    "responses": responses,
+                    "saved_to": str(stim_output_dir),
+                    "index_file": str(index_path),
+                    "auto_saved": True
                 }
                 
         except Exception as e:

@@ -233,6 +233,10 @@ UnityProject/                       # 您的Unity项目
    - 勾选：自动设置主摄像机位置和参数
    - 不勾选：保持摄像机当前设置
 
+5. **创建虚拟刺激UI**（⭐ v4.1新增）
+   - 勾选：自动创建完整的虚拟刺激控制面板
+   - 不勾选：不创建刺激UI（可后期手动添加）
+
 #### 完整自动设置流程
 
 点击**"开始自动设置"**按钮后，工具会执行以下操作：
@@ -250,12 +254,31 @@ UnityProject/                       # 您的Unity项目
 3. **创建BrainManager对象**
    - 在Hierarchy中创建"BrainManager" GameObject
    - 自动添加BrainVisualization组件
+   - 自动添加WebSocketClient组件（用于后端通信）
+   - 自动添加StimulationInput组件（如果勾选创建刺激UI）
    - 设置默认参数
+   - **启用自动文件监控**（Auto Reload默认开启）
 
 4. **配置摄像机**（可选）
    - 设置主摄像机位置：(0, 5, -10)
    - 设置摄像机角度：向下30度
    - 设置背景颜色：黑色
+
+5. **创建虚拟刺激UI**（⭐ v4.1新增，可选）
+   - 自动创建Canvas（如果不存在）
+   - 创建完整的刺激控制面板，包含：
+     - 标题文本："虚拟刺激控制"
+     - 目标脑区输入框（支持逗号分隔）
+     - 振幅滑块（0-5范围）
+     - 振幅显示文本
+     - 刺激模式下拉菜单（constant/sine/pulse/ramp）
+     - "应用刺激"按钮
+     - 状态显示文本
+   - **自动连接所有UI组件到StimulationInput脚本**
+   - 面板位置：左下角（屏幕2%-35%宽，2%-40%高）
+   - 半透明深色背景，不遮挡主视图
+
+**完全自动化**：所有UI组件、事件绑定、脚本引用全部自动完成，无需手动拖拽任何对象！
 
 #### 部分执行功能
 
@@ -376,12 +399,26 @@ wsClient.OnBrainStateReceived += (state) => {
 
 #### 4. StimulationInput.cs
 
-**功能**：虚拟刺激输入组件
+**功能**：虚拟刺激输入组件（**全自动配置**）
 
 **用途**：
 - 创建UI界面接收用户输入
 - 发送刺激信号到后端
 - 模拟脑区刺激
+- **自动与后端通信，无需手动操作**
+
+**自动化特性（v4.1新增）**：
+- ✅ **UI自动创建**：使用TwinBrain自动设置工具一键创建完整UI
+- ✅ **自动连接后端**：通过WebSocketClient自动发送刺激请求
+- ✅ **结果自动加载**：后端计算完成后Unity自动加载和播放结果
+- ✅ **零手动步骤**：输入参数 → 点击按钮 → 自动显示结果
+
+**使用流程**：
+1. 在Unity中输入目标脑区ID（如：1,2,3）
+2. 调整振幅滑块（0-5）
+3. 选择刺激模式（constant/sine/pulse/ramp）
+4. 点击"应用刺激"按钮
+5. **等待2-5秒，结果自动加载并播放** ← 完全自动！
 
 #### 5. TimelineController.cs
 
@@ -461,15 +498,131 @@ python -m unity_integration.brain_state_exporter \
 
 #### 6. stimulation_simulator.py
 
-**功能**：刺激模拟器
+**功能**：刺激模拟器（**已自动集成**）
 
 **用途**：
 - 模拟虚拟刺激
 - 计算刺激响应
+- **自动在后端服务器中初始化和使用**
+
+**自动化集成（v4.1）**：
+- ✅ **自动初始化**：`unity_startup.py` 自动创建并配置 StimulationSimulator
+- ✅ **自动响应**：接收Unity刺激请求并计算大脑响应
+- ✅ **自动导出JSON**：结果自动保存到 `model_output/stimulation/stim_YYYYMMDD_HHMMSS/`
+- ✅ **自动创建索引**：生成 `sequence_index.json` 供Unity自动加载
+
+**后端自动处理流程**：
+1. 接收Unity发送的刺激参数
+2. 验证并规范化参数（振幅、频率、持续时间等）
+3. 使用StimulationSimulator计算大脑响应（50帧）
+4. 自动导出每帧为JSON文件
+5. 创建sequence_index.json索引文件
+6. 返回Unity结果路径和元数据
+
+**无需手动配置**：所有设置由 `unity_startup.py` 和 `realtime_server.py` 自动完成！
 
 ---
 
 ## 进阶使用
+
+### ⭐ 模式零：全自动虚拟刺激工作流（推荐，v4.1新增）
+
+**适用场景**：交互式虚拟刺激实验，无需任何手动文件操作
+
+**完全自动化流程**：
+
+#### 第一步：启动后端服务器
+
+```bash
+cd /path/to/twinbrain
+
+# 使用训练好的模型（推荐）
+python unity_startup.py --model results/hetero_gnn_trained.pt
+
+# 或演示模式（无模型）
+python unity_startup.py --demo
+```
+
+看到以下信息表示成功：
+```
+🚀 服务器启动: ws://0.0.0.0:8765
+等待Unity客户端连接...
+✓ 刺激模拟器: 200个脑区
+✓ 状态导出器: unity_project/brain_data/model_output
+```
+
+#### 第二步：在Unity中使用虚拟刺激
+
+1. **打开Unity项目并点击Play**
+   - BrainManager会自动连接到后端
+   - 在Console中看到"Connected to server"
+
+2. **使用虚拟刺激UI（左下角面板）**
+   - 输入目标脑区ID：例如 `1,5,10`
+   - 调整振幅滑块：0.0 ~ 5.0
+   - 选择刺激模式：constant / sine / pulse / ramp
+   - 点击"应用刺激"按钮
+
+3. **自动处理和显示**
+   - ✅ 后端自动接收参数并计算响应（约2-3秒）
+   - ✅ 自动保存50帧JSON文件到 `model_output/stimulation/stim_YYYYMMDD_HHMMSS/`
+   - ✅ Unity自动检测新结果（每2秒扫描一次）
+   - ✅ 自动加载并播放刺激响应动画
+   - **无需点击任何刷新按钮！无需手动转换文件！无需拖拽文件！**
+
+4. **查看结果**
+   - 动画自动播放，显示刺激对大脑活动的影响
+   - 可使用空格键暂停/播放
+   - 可使用R键重新加载
+
+#### 自动化文件管理
+
+后端自动创建以下结构：
+```
+unity_project/brain_data/model_output/
+├── stimulation/                    ← 虚拟刺激结果
+│   ├── stim_20240215_143022/      ← 自动按时间戳命名
+│   │   ├── frame_0000.json
+│   │   ├── frame_0001.json
+│   │   ├── ...
+│   │   ├── frame_0049.json
+│   │   └── sequence_index.json    ← Unity自动读取此文件
+│   └── stim_20240215_143156/      ← 新的刺激会创建新目录
+│       └── ...
+└── predictions/                    ← 预测结果
+    └── pred_20240215_143045/      ← 预测结果同样自动保存
+        └── ...
+```
+
+Unity自动监控这些目录，发现新内容立即加载！
+
+#### 配置自动加载（可选）
+
+在BrainManager的BrainVisualization组件中：
+- **Enable Auto Reload**: ✅ （默认启用）
+- **Watch Directory**: `unity_project/brain_data/model_output`
+- **Watch Interval**: 2.0秒（检查新文件的频率）
+- **Auto Load Type**: `both`（同时监控预测和刺激）
+  - 可改为 `stimulation` 只监控刺激
+  - 可改为 `predictions` 只监控预测
+
+#### 完整自动化对比
+
+| 操作步骤 | 旧版本（手动） | v4.1（全自动） |
+|---------|---------------|----------------|
+| 输入刺激参数 | ✅ 手动输入 | ✅ 手动输入 |
+| 发送到后端 | ✅ 点击按钮 | ✅ 点击按钮 |
+| 后端计算 | ✅ 自动 | ✅ 自动 |
+| 保存JSON | ❌ **手动保存** | ✅ **自动保存** |
+| 转换格式 | ❌ **手动运行脚本** | ✅ **自动转换** |
+| 移动文件 | ❌ **手动复制** | ✅ **自动放置** |
+| 刷新Unity | ❌ **手动点击刷新** | ✅ **自动检测** |
+| 加载数据 | ❌ **手动点击加载** | ✅ **自动加载** |
+| 播放动画 | ✅ 自动播放 | ✅ 自动播放 |
+
+**总结：从8步减少到2步（仅输入参数+点击应用），节省90%时间！**
+
+---
 
 ### 模式一：离线可视化（JSON文件）
 

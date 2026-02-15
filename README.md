@@ -4,56 +4,65 @@
 
 ## 📚 文档
 
-本项目包含完整的文档集：
+### 🌟 推荐阅读（新用户从这里开始）
 
-### 使用指南（根目录）
-1. **[使用指南.md](使用指南.md)** - 面向无编程基础用户的完整操作指南
-2. **[Unity使用指南.md](Unity使用指南.md)** - Unity可视化完整使用指南（基于一键安装脚本）⭐⭐
+**[UNIFIED_GUIDE.md](UNIFIED_GUIDE.md)** - 一体化完整使用指南 ⭐⭐⭐  
+包含从安装、模型训练、Unity设置、后端配置到虚拟刺激的完整流程
 
-### 技术文档（根目录）
-4. **[模型说明.md](模型说明.md)** - 模型架构、原理和技术细节
-5. **[MODEL_FORMAT.md](MODEL_FORMAT.md)** - 模型和缓存文件格式规范 ⭐
-6. **[PERFORMANCE.md](PERFORMANCE.md)** - 性能优化指南 ⭐
-7. **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - 问题排查指南 ⭐
-8. **[项目规范说明书.md](项目规范说明书.md)** - 项目开发规范
+### 详细参考文档
 
-### 项目更新记录（docs/目录）
-9. **[docs/更新日志.md](docs/更新日志.md)** - 版本更新记录和新功能说明
-10. **[docs/REORGANIZATION_SUMMARY.md](docs/REORGANIZATION_SUMMARY.md)** - 项目重组总结
-11. **[docs/OPTIMIZATION_SUMMARY.md](docs/OPTIMIZATION_SUMMARY.md)** - 本次优化总结
+1. **[Unity使用指南.md](Unity使用指南.md)** - Unity可视化详细参考
+2. **[模型说明.md](模型说明.md)** - 模型架构和技术细节
+3. **[MODEL_FORMAT.md](MODEL_FORMAT.md)** - 数据格式规范
+4. **[PERFORMANCE.md](PERFORMANCE.md)** - 性能优化指南
+5. **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - 问题排查指南
+6. **[项目规范说明书.md](项目规范说明书.md)** - 开发规范
+
+### 更新记录
+
+7. **[docs/更新日志.md](docs/更新日志.md)** - 版本更新记录
 
 ## 🚀 快速开始
 
-### 安装
+### 安装和设置
 
 ```bash
-# 克隆仓库
+# 1. 克隆仓库
 git clone https://github.com/sheinclotho/twinbrain.git
 cd twinbrain
 
-# 安装依赖
+# 2. 安装依赖
 pip install -r requirements.txt
-```
 
-### 一键生成Unity项目
+# 3. 一键安装到Unity项目
+python unity_one_click_install.py --unity-project /path/to/UnityProject
 
-```bash
-# 基本使用：创建项目结构
-python setup_unity_project.py --auto-setup
+# 4. （可选）训练模型
+python main.py  # 模型保存到 results/hetero_gnn_trained.pt
 
-# 使用FreeSurfer数据自动生成OBJ模型
-python setup_unity_project.py --freesurfer-dir /path/to/freesurfer/files
-
-# 自动安装到Unity项目（v2.5新增）⭐
-python unity_package_installer.py --unity-project /path/to/UnityProject
-
-# 启动Unity后端服务（支持实时预测和刺激）
+# 5. 启动后端服务器
+python unity_startup.py --model results/hetero_gnn_trained.pt
+# 或使用演示模式（无需模型）
 python unity_startup.py --demo
 ```
 
-## 📖 详细说明
+### Unity内操作
 
-请查看 **[使用指南.md](使用指南.md)** 获取完整的分步教程。
+1. 打开Unity项目，等待包加载完成
+2. 菜单：**TwinBrain → 自动设置场景**
+3. 勾选所有选项（包括"创建虚拟刺激UI"）
+4. 点击"开始自动设置"
+5. 点击Play，开始使用！
+
+## 📖 完整教程
+
+**请查看 [UNIFIED_GUIDE.md](UNIFIED_GUIDE.md)** 获取详细的分步教程，包括：
+- 系统要求和安装
+- 模型训练和文件位置
+- Unity项目完整配置
+- 后端服务器配置和使用
+- 虚拟刺激全自动化工作流
+- 故障排除和技术支持
 
 ## ⚡ 主要功能
 
