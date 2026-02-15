@@ -63,7 +63,8 @@ class UnityWorkflowSetup:
         Args:
             project_root: 项目根目录
             output_base: 输出基础目录
-            verbose: 是否输出详细日志（默认True）
+            verbose: 是否输出详细日志（默认True）。设置为False可以在被其他脚本调用时
+                    减少冗余输出，例如unity_one_click_install.py会使用verbose=False
         """
         self.project_root = project_root or Path(__file__).parent
         self.output_base = output_base or (self.project_root / "unity_project")
