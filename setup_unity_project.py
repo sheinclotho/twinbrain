@@ -1525,7 +1525,7 @@ PORT = 8765  # 改为其他端口
 
 ## 更多信息
 
-查看项目文档: Unity使用指南_v3.md
+查看项目文档: Unity使用指南.md
 """
         
         readme_file = dest_obj_dir / "README.md"

@@ -255,6 +255,14 @@ class WorkflowManager:
         if self.config.export_obj_per_region:
             # 新模式: 每个脑区导出独立OBJ（用于脑膜模拟）
             self.logger.info(f"  导出独立脑区OBJ模型（脑膜模拟模式）...")
+            
+            # Check if we have region information
+            if not self.atlas_info or not self.atlas_info.get('regions'):
+                self.logger.error("  ❌ 无法导出独立脑区OBJ: 缺少图谱区域信息")
+                self.logger.error("     请确保正确加载了FreeSurfer数据或提供了atlas_info")
+                return obj_files
+            
+            n_regions = len(self.atlas_info['regions'])
             self.logger.info(f"    将生成 {n_regions} 个独立OBJ文件")
             
             # Use mean activity across time for each region
@@ -265,6 +273,10 @@ class WorkflowManager:
                 activity_data=mean_activity,
                 prefix="brain_region"
             )
+            
+            if not exported_paths:
+                self.logger.error("  ❌ OBJ文件导出失败，请检查图谱信息")
+                return obj_files
             
             obj_files.extend([str(f.relative_to(self.output_dir)) for f in exported_paths])
             self.logger.info(f"  ✓ 生成了 {len(exported_paths)} 个独立脑区OBJ文件")
