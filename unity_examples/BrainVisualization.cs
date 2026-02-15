@@ -84,6 +84,19 @@ namespace TwinBrain
         [Tooltip("Enable click interaction")]
         public bool enableInteraction = true;
         
+        [Header("Auto-Reload Settings")]
+        [Tooltip("Enable automatic file watching for new results")]
+        public bool enableAutoReload = true;
+        
+        [Tooltip("Directory to watch for new result folders (e.g., model_output)")]
+        public string watchDirectory = "unity_project/brain_data/model_output";
+        
+        [Tooltip("Watch interval in seconds")]
+        public float watchInterval = 2.0f;
+        
+        [Tooltip("Auto-load type: predictions, stimulation, or both")]
+        public string autoLoadType = "both";
+        
         // Private variables
         private BrainStateData currentState;
         private Dictionary<int, GameObject> regionObjects = new Dictionary<int, GameObject>();
@@ -95,6 +108,11 @@ namespace TwinBrain
         private bool isPlaying = false;
         private int selectedRegionId = -1;
         
+        // Auto-reload tracking
+        private float lastWatchTime = 0f;
+        private string lastLoadedDirectory = "";
+        private HashSet<string> knownDirectories = new HashSet<string>();
+        
         // Normalization values for color mapping across entire sequence
         private float globalMinActivity = 0f;
         private float globalMaxActivity = 1f;
@@ -105,6 +123,9 @@ namespace TwinBrain
         
         void Start()
         {
+            // Initialize known directories set
+            knownDirectories = new HashSet<string>();
+            
             if (loadSequence)
             {
                 LoadSequence();
@@ -117,10 +138,23 @@ namespace TwinBrain
             {
                 LoadSingleState(jsonPath);
             }
+            
+            // Initialize file watching if enabled
+            if (enableAutoReload)
+            {
+                InitializeFileWatching();
+            }
         }
         
         void Update()
         {
+            // Auto-reload check
+            if (enableAutoReload && Time.time - lastWatchTime > watchInterval)
+            {
+                CheckForNewResults();
+                lastWatchTime = Time.time;
+            }
+            
             // Keyboard controls
             if (Input.GetKeyDown(KeyCode.Space))
             {
@@ -662,6 +696,173 @@ namespace TwinBrain
             }
             
             isPlaying = false;
+        }
+        
+        /// <summary>
+        /// Initialize file watching system
+        /// </summary>
+        void InitializeFileWatching()
+        {
+            // Scan existing directories to avoid loading old results
+            try
+            {
+                if (Directory.Exists(watchDirectory))
+                {
+                    // Get predictions directories
+                    string predictionsDir = Path.Combine(watchDirectory, "predictions");
+                    if (Directory.Exists(predictionsDir))
+                    {
+                        string[] predDirs = Directory.GetDirectories(predictionsDir);
+                        foreach (string dir in predDirs)
+                        {
+                            knownDirectories.Add(dir);
+                        }
+                    }
+                    
+                    // Get stimulation directories
+                    string stimulationDir = Path.Combine(watchDirectory, "stimulation");
+                    if (Directory.Exists(stimulationDir))
+                    {
+                        string[] stimDirs = Directory.GetDirectories(stimulationDir);
+                        foreach (string dir in stimDirs)
+                        {
+                            knownDirectories.Add(dir);
+                        }
+                    }
+                    
+                    Debug.Log(string.Format("File watcher initialized. Tracking {0} existing directories", knownDirectories.Count));
+                }
+                else
+                {
+                    Debug.LogWarning(string.Format("Watch directory not found: {0}", watchDirectory));
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError(string.Format("Failed to initialize file watching: {0}", e.Message));
+            }
+        }
+        
+        /// <summary>
+        /// Check for new result directories and auto-load them
+        /// </summary>
+        void CheckForNewResults()
+        {
+            try
+            {
+                if (!Directory.Exists(watchDirectory))
+                {
+                    return;
+                }
+                
+                string newDirectory = null;
+                
+                // Check for new prediction directories
+                if (autoLoadType == "predictions" || autoLoadType == "both")
+                {
+                    string predictionsDir = Path.Combine(watchDirectory, "predictions");
+                    if (Directory.Exists(predictionsDir))
+                    {
+                        string[] predDirs = Directory.GetDirectories(predictionsDir);
+                        
+                        // Sort by creation time, get newest
+                        System.Array.Sort(predDirs, (a, b) => 
+                            Directory.GetCreationTime(b).CompareTo(Directory.GetCreationTime(a)));
+                        
+                        foreach (string dir in predDirs)
+                        {
+                            if (!knownDirectories.Contains(dir))
+                            {
+                                // Found new prediction directory
+                                newDirectory = dir;
+                                knownDirectories.Add(dir);
+                                Debug.Log(string.Format("Auto-detected new prediction: {0}", Path.GetFileName(dir)));
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                // Check for new stimulation directories
+                if (newDirectory == null && (autoLoadType == "stimulation" || autoLoadType == "both"))
+                {
+                    string stimulationDir = Path.Combine(watchDirectory, "stimulation");
+                    if (Directory.Exists(stimulationDir))
+                    {
+                        string[] stimDirs = Directory.GetDirectories(stimulationDir);
+                        
+                        // Sort by creation time, get newest
+                        System.Array.Sort(stimDirs, (a, b) => 
+                            Directory.GetCreationTime(b).CompareTo(Directory.GetCreationTime(a)));
+                        
+                        foreach (string dir in stimDirs)
+                        {
+                            if (!knownDirectories.Contains(dir))
+                            {
+                                // Found new stimulation directory
+                                newDirectory = dir;
+                                knownDirectories.Add(dir);
+                                Debug.Log(string.Format("Auto-detected new stimulation: {0}", Path.GetFileName(dir)));
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                // Auto-load new results if found
+                if (newDirectory != null && newDirectory != lastLoadedDirectory)
+                {
+                    AutoLoadNewResults(newDirectory);
+                    lastLoadedDirectory = newDirectory;
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError(string.Format("Error checking for new results: {0}", e.Message));
+            }
+        }
+        
+        /// <summary>
+        /// Auto-load newly detected results
+        /// </summary>
+        void AutoLoadNewResults(string directory)
+        {
+            try
+            {
+                Debug.Log(string.Format("Auto-loading results from: {0}", directory));
+                
+                // Check if sequence_index.json exists
+                string indexPath = Path.Combine(directory, "sequence_index.json");
+                if (File.Exists(indexPath))
+                {
+                    // Stop current playback
+                    if (isPlaying)
+                    {
+                        Pause();
+                    }
+                    
+                    // Load the new sequence
+                    jsonPath = directory;
+                    loadSequence = true;
+                    LoadSequence();
+                    
+                    // Auto-play the new sequence
+                    if (autoPlay)
+                    {
+                        Play();
+                    }
+                    
+                    Debug.Log(string.Format("✓ Auto-loaded {0} frames from new results", GetTotalFrames()));
+                }
+                else
+                {
+                    Debug.LogWarning(string.Format("No sequence_index.json found in: {0}", directory));
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError(string.Format("Failed to auto-load results: {0}", e.Message));
+            }
         }
         
         /// <summary>

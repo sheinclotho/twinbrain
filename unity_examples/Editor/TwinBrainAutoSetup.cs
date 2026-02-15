@@ -22,6 +22,7 @@ namespace TwinBrain.Editor
         private bool createBrainManager = true;
         private bool createExampleSphere = true;
         private bool setupCamera = true;
+        private bool setupStimulationUI = true;  // New option
         private Vector2 scrollPosition;
         
         [MenuItem("TwinBrain/自动设置场景", false, 1)]
@@ -45,7 +46,8 @@ namespace TwinBrain.Editor
                 "2. 创建BrainManager GameObject\n" +
                 "3. 添加必要的组件\n" +
                 "4. 创建示例预制体\n" +
-                "5. 配置摄像机",
+                "5. 配置摄像机\n" +
+                "6. 创建虚拟刺激UI（可选）",
                 MessageType.Info
             );
             
@@ -57,6 +59,7 @@ namespace TwinBrain.Editor
             createBrainManager = EditorGUILayout.Toggle("创建BrainManager", createBrainManager);
             createExampleSphere = EditorGUILayout.Toggle("创建示例球体预制体", createExampleSphere);
             setupCamera = EditorGUILayout.Toggle("配置摄像机", setupCamera);
+            setupStimulationUI = EditorGUILayout.Toggle("创建虚拟刺激UI", setupStimulationUI);
             
             EditorGUILayout.Space();
             
@@ -115,12 +118,19 @@ namespace TwinBrain.Editor
                     SetupCamera();
                 }
                 
+                if (setupStimulationUI)
+                {
+                    EditorUtility.DisplayProgressBar("TwinBrain自动设置", "创建虚拟刺激UI...", 0.9f);
+                    SetupStimulationUI();
+                }
+                
                 EditorUtility.DisplayProgressBar("TwinBrain自动设置", "完成！", 1f);
                 EditorUtility.DisplayDialog(
                     "设置完成",
                     "TwinBrain场景设置完成！\n\n请检查Hierarchy中的BrainManager对象。\n\n" +
                     "注意：OBJ文件已导入并自动设置，无需手动配置每个文件。\n" +
-                    "在BrainVisualization组件中勾选'Use Obj Models'即可使用所有OBJ模型。",
+                    "在BrainVisualization组件中勾选'Use Obj Models'即可使用所有OBJ模型。\n\n" +
+                    "虚拟刺激UI已创建（如果勾选），可通过Canvas/StimulationPanel访问。",
                     "确定"
                 );
             }
@@ -226,11 +236,236 @@ namespace TwinBrain.Editor
             GameObject brainManager = new GameObject("BrainManager");
             brainManager.transform.position = Vector3.zero;
             
-            brainManager.AddComponent(System.Type.GetType("BrainVisualization"));
+            // Add BrainVisualization component
+            var brainVis = brainManager.AddComponent(System.Type.GetType("TwinBrain.BrainVisualization"));
+            
+            // Add WebSocketClient component for real-time communication
+            var wsClient = brainManager.AddComponent(System.Type.GetType("TwinBrain.WebSocketClient"));
+            
+            // Add StimulationInput component if creating UI
+            if (setupStimulationUI)
+            {
+                var stimInput = brainManager.AddComponent(System.Type.GetType("TwinBrain.StimulationInput"));
+                Debug.Log("✓ 已添加 StimulationInput 组件");
+            }
             
             Selection.activeGameObject = brainManager;
             
-            Debug.Log("BrainManager创建完成");
+            Debug.Log("BrainManager创建完成（含WebSocketClient" + 
+                      (setupStimulationUI ? "和StimulationInput" : "") + "）");
+        }
+        
+        void SetupStimulationUI()
+        {
+            // Create Canvas if it doesn't exist
+            Canvas canvas = FindObjectOfType<Canvas>();
+            if (canvas == null)
+            {
+                GameObject canvasObj = new GameObject("Canvas");
+                canvas = canvasObj.AddComponent<Canvas>();
+                canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+                canvasObj.AddComponent<UnityEngine.UI.CanvasScaler>();
+                canvasObj.AddComponent<UnityEngine.UI.GraphicRaycaster>();
+                Debug.Log("✓ 创建 Canvas");
+            }
+            
+            // Create StimulationPanel
+            GameObject panel = new GameObject("StimulationPanel");
+            panel.transform.SetParent(canvas.transform, false);
+            
+            var panelImage = panel.AddComponent<UnityEngine.UI.Image>();
+            panelImage.color = new Color(0.2f, 0.2f, 0.2f, 0.8f);
+            
+            var rectTransform = panel.GetComponent<RectTransform>();
+            rectTransform.anchorMin = new Vector2(0.02f, 0.02f);
+            rectTransform.anchorMax = new Vector2(0.35f, 0.4f);
+            rectTransform.offsetMin = Vector2.zero;
+            rectTransform.offsetMax = Vector2.zero;
+            
+            // Add title
+            GameObject title = new GameObject("Title");
+            title.transform.SetParent(panel.transform, false);
+            var titleText = title.AddComponent<UnityEngine.UI.Text>();
+            titleText.text = "虚拟刺激控制";
+            titleText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            titleText.fontSize = 18;
+            titleText.color = Color.white;
+            titleText.alignment = TextAnchor.MiddleCenter;
+            
+            var titleRect = title.GetComponent<RectTransform>();
+            titleRect.anchorMin = new Vector2(0.1f, 0.85f);
+            titleRect.anchorMax = new Vector2(0.9f, 0.95f);
+            titleRect.offsetMin = Vector2.zero;
+            titleRect.offsetMax = Vector2.zero;
+            
+            // Add target regions input field
+            GameObject inputFieldObj = new GameObject("TargetRegionsInput");
+            inputFieldObj.transform.SetParent(panel.transform, false);
+            
+            var inputFieldImage = inputFieldObj.AddComponent<UnityEngine.UI.Image>();
+            inputFieldImage.color = Color.white;
+            
+            var inputField = inputFieldObj.AddComponent<UnityEngine.UI.InputField>();
+            
+            GameObject placeholder = new GameObject("Placeholder");
+            placeholder.transform.SetParent(inputFieldObj.transform, false);
+            var placeholderText = placeholder.AddComponent<UnityEngine.UI.Text>();
+            placeholderText.text = "输入目标脑区ID (逗号分隔)";
+            placeholderText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            placeholderText.fontSize = 12;
+            placeholderText.color = new Color(0.5f, 0.5f, 0.5f);
+            placeholderText.fontStyle = FontStyle.Italic;
+            
+            GameObject textObj = new GameObject("Text");
+            textObj.transform.SetParent(inputFieldObj.transform, false);
+            var textComponent = textObj.AddComponent<UnityEngine.UI.Text>();
+            textComponent.text = "";
+            textComponent.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            textComponent.fontSize = 12;
+            textComponent.color = Color.black;
+            textComponent.supportRichText = false;
+            
+            inputField.textComponent = textComponent;
+            inputField.placeholder = placeholderText;
+            
+            var inputRect = inputFieldObj.GetComponent<RectTransform>();
+            inputRect.anchorMin = new Vector2(0.1f, 0.7f);
+            inputRect.anchorMax = new Vector2(0.9f, 0.8f);
+            inputRect.offsetMin = Vector2.zero;
+            inputRect.offsetMax = Vector2.zero;
+            
+            // Add amplitude slider
+            GameObject sliderObj = new GameObject("AmplitudeSlider");
+            sliderObj.transform.SetParent(panel.transform, false);
+            
+            var slider = sliderObj.AddComponent<UnityEngine.UI.Slider>();
+            slider.minValue = 0f;
+            slider.maxValue = 5f;
+            slider.value = 1f;
+            
+            var sliderRect = sliderObj.GetComponent<RectTransform>();
+            sliderRect.anchorMin = new Vector2(0.1f, 0.5f);
+            sliderRect.anchorMax = new Vector2(0.9f, 0.6f);
+            sliderRect.offsetMin = Vector2.zero;
+            sliderRect.offsetMax = Vector2.zero;
+            
+            // Slider components
+            GameObject background = new GameObject("Background");
+            background.transform.SetParent(sliderObj.transform, false);
+            var bgImage = background.AddComponent<UnityEngine.UI.Image>();
+            bgImage.color = new Color(0.3f, 0.3f, 0.3f);
+            
+            GameObject fillArea = new GameObject("Fill Area");
+            fillArea.transform.SetParent(sliderObj.transform, false);
+            
+            GameObject fill = new GameObject("Fill");
+            fill.transform.SetParent(fillArea.transform, false);
+            var fillImage = fill.AddComponent<UnityEngine.UI.Image>();
+            fillImage.color = Color.green;
+            
+            GameObject handleSlideArea = new GameObject("Handle Slide Area");
+            handleSlideArea.transform.SetParent(sliderObj.transform, false);
+            
+            GameObject handle = new GameObject("Handle");
+            handle.transform.SetParent(handleSlideArea.transform, false);
+            var handleImage = handle.AddComponent<UnityEngine.UI.Image>();
+            handleImage.color = Color.white;
+            
+            slider.fillRect = fill.GetComponent<RectTransform>();
+            slider.handleRect = handle.GetComponent<RectTransform>();
+            
+            // Add amplitude text
+            GameObject amplitudeTextObj = new GameObject("AmplitudeText");
+            amplitudeTextObj.transform.SetParent(panel.transform, false);
+            var amplitudeText = amplitudeTextObj.AddComponent<UnityEngine.UI.Text>();
+            amplitudeText.text = "Amplitude: 1.00";
+            amplitudeText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            amplitudeText.fontSize = 12;
+            amplitudeText.color = Color.white;
+            
+            var ampTextRect = amplitudeTextObj.GetComponent<RectTransform>();
+            ampTextRect.anchorMin = new Vector2(0.1f, 0.4f);
+            ampTextRect.anchorMax = new Vector2(0.9f, 0.5f);
+            ampTextRect.offsetMin = Vector2.zero;
+            ampTextRect.offsetMax = Vector2.zero;
+            
+            // Add pattern dropdown
+            GameObject dropdownObj = new GameObject("PatternDropdown");
+            dropdownObj.transform.SetParent(panel.transform, false);
+            
+            var dropdown = dropdownObj.AddComponent<UnityEngine.UI.Dropdown>();
+            dropdown.options.Add(new UnityEngine.UI.Dropdown.OptionData("constant"));
+            dropdown.options.Add(new UnityEngine.UI.Dropdown.OptionData("sine"));
+            dropdown.options.Add(new UnityEngine.UI.Dropdown.OptionData("pulse"));
+            dropdown.options.Add(new UnityEngine.UI.Dropdown.OptionData("ramp"));
+            
+            var dropdownRect = dropdownObj.GetComponent<RectTransform>();
+            dropdownRect.anchorMin = new Vector2(0.1f, 0.25f);
+            dropdownRect.anchorMax = new Vector2(0.9f, 0.35f);
+            dropdownRect.offsetMin = Vector2.zero;
+            dropdownRect.offsetMax = Vector2.zero;
+            
+            // Add send button
+            GameObject buttonObj = new GameObject("SendButton");
+            buttonObj.transform.SetParent(panel.transform, false);
+            
+            var buttonImage = buttonObj.AddComponent<UnityEngine.UI.Image>();
+            buttonImage.color = new Color(0.2f, 0.6f, 0.2f);
+            
+            var button = buttonObj.AddComponent<UnityEngine.UI.Button>();
+            
+            GameObject buttonTextObj = new GameObject("Text");
+            buttonTextObj.transform.SetParent(buttonObj.transform, false);
+            var buttonText = buttonTextObj.AddComponent<UnityEngine.UI.Text>();
+            buttonText.text = "应用刺激";
+            buttonText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            buttonText.fontSize = 14;
+            buttonText.color = Color.white;
+            buttonText.alignment = TextAnchor.MiddleCenter;
+            
+            var buttonRect = buttonObj.GetComponent<RectTransform>();
+            buttonRect.anchorMin = new Vector2(0.2f, 0.05f);
+            buttonRect.anchorMax = new Vector2(0.8f, 0.18f);
+            buttonRect.offsetMin = Vector2.zero;
+            buttonRect.offsetMax = Vector2.zero;
+            
+            // Add status text
+            GameObject statusTextObj = new GameObject("StatusText");
+            statusTextObj.transform.SetParent(panel.transform, false);
+            var statusText = statusTextObj.AddComponent<UnityEngine.UI.Text>();
+            statusText.text = "Ready";
+            statusText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            statusText.fontSize = 10;
+            statusText.color = Color.yellow;
+            statusText.alignment = TextAnchor.MiddleCenter;
+            
+            var statusRect = statusTextObj.GetComponent<RectTransform>();
+            statusRect.anchorMin = new Vector2(0.1f, 0.15f);
+            statusRect.anchorMax = new Vector2(0.9f, 0.2f);
+            statusRect.offsetMin = Vector2.zero;
+            statusRect.offsetMax = Vector2.zero;
+            
+            // Wire up StimulationInput component
+            GameObject brainManager = GameObject.Find("BrainManager");
+            if (brainManager != null)
+            {
+                var stimInput = brainManager.GetComponent(System.Type.GetType("TwinBrain.StimulationInput"));
+                if (stimInput != null)
+                {
+                    // Use reflection to set fields
+                    var stimType = stimInput.GetType();
+                    stimType.GetField("targetRegionsInput").SetValue(stimInput, inputField);
+                    stimType.GetField("amplitudeSlider").SetValue(stimInput, slider);
+                    stimType.GetField("amplitudeText").SetValue(stimInput, amplitudeText);
+                    stimType.GetField("patternDropdown").SetValue(stimInput, dropdown);
+                    stimType.GetField("sendButton").SetValue(stimInput, button);
+                    stimType.GetField("statusText").SetValue(stimInput, statusText);
+                    
+                    Debug.Log("✓ 虚拟刺激UI组件已连接到StimulationInput");
+                }
+            }
+            
+            Debug.Log("✓ 虚拟刺激UI创建完成");
         }
         
         void SetupCamera()
