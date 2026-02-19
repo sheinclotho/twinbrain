@@ -170,7 +170,6 @@ namespace TwinBrain.Editor
                 if (importer != null)
                 {
                     importer.globalScale = 0.01f;
-                    importer.importMaterials = true;
                     importer.materialImportMode = ModelImporterMaterialImportMode.ImportStandard;
                     importer.SaveAndReimport();
                     configured++;

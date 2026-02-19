@@ -54,7 +54,8 @@ class UnityWorkflowSetup:
     def __init__(
         self,
         project_root: Path = None,
-        output_base: Path = None
+        output_base: Path = None,
+        verbose: bool = True
     ):
         """
         初始化设置管理器
@@ -62,9 +63,12 @@ class UnityWorkflowSetup:
         Args:
             project_root: 项目根目录
             output_base: 输出基础目录
+            verbose: 是否输出详细日志（默认True）。设置为False可以在被其他脚本调用时
+                    减少冗余输出，例如unity_one_click_install.py会使用verbose=False
         """
         self.project_root = project_root or Path(__file__).parent
         self.output_base = output_base or (self.project_root / "unity_project")
+        self.verbose = verbose
         
         # 定义标准文件夹结构
         self.freesurfer_dir = self.output_base / "freesurfer_files"
@@ -77,9 +81,10 @@ class UnityWorkflowSetup:
         
     def create_folder_structure(self):
         """创建标准文件夹结构"""
-        logger.info("="*80)
-        logger.info("步骤 1: 创建文件夹结构")
-        logger.info("="*80)
+        if self.verbose:
+            logger.info("="*80)
+            logger.info("步骤 1: 创建文件夹结构")
+            logger.info("="*80)
         
         folders = [
             (self.freesurfer_dir, "FreeSurfer表面数据文件"),
@@ -92,11 +97,13 @@ class UnityWorkflowSetup:
         
         for folder, description in folders:
             folder.mkdir(parents=True, exist_ok=True)
-            logger.info(f"  ✓ 创建: {folder.relative_to(self.output_base)} - {description}")
+            if self.verbose:
+                logger.info(f"  ✓ 创建: {folder.relative_to(self.output_base)} - {description}")
         
         # 创建README文件
         self._create_folder_readmes()
-        logger.info("  ✓ 文件夹结构创建完成")
+        if self.verbose:
+            logger.info("  ✓ 文件夹结构创建完成")
         
     def _create_folder_readmes(self):
         """为每个文件夹创建README说明"""
@@ -169,9 +176,10 @@ Unity项目资源文件：
             lh_annot: 左半球注释文件路径
             rh_annot: 右半球注释文件路径
         """
-        logger.info("\n" + "="*80)
-        logger.info("步骤 2: 处理FreeSurfer文件")
-        logger.info("="*80)
+        if self.verbose:
+            logger.info("\n" + "="*80)
+            logger.info("步骤 2: 处理FreeSurfer文件")
+            logger.info("="*80)
         
         # 如果提供了文件路径，复制到标准位置
         if any([lh_surface, rh_surface, lh_annot, rh_annot]):
@@ -185,7 +193,8 @@ Unity项目资源文件：
             for src, dst in files_to_copy:
                 if src and Path(src).exists():
                     shutil.copy2(src, dst)
-                    logger.info(f"  ✓ 复制: {src} -> {dst.name}")
+                    if self.verbose:
+                        logger.info(f"  ✓ 复制: {src} -> {dst.name}")
         
         # 检查FreeSurfer文件是否存在
         required_files = {
@@ -198,19 +207,21 @@ Unity项目资源文件：
         missing_files = [name for name, path in required_files.items() if not path.exists()]
         
         if not missing_files:
-            logger.info("  ✓ 所有FreeSurfer文件已就位")
-            logger.info(f"    - lh.pial: {required_files['lh_surface']}")
-            logger.info(f"    - rh.pial: {required_files['rh_surface']}")
-            logger.info(f"    - lh.annot: {required_files['lh_annot']}")
-            logger.info(f"    - rh.annot: {required_files['rh_annot']}")
+            if self.verbose:
+                logger.info("  ✓ 所有FreeSurfer文件已就位")
+                logger.info(f"    - lh.pial: {required_files['lh_surface']}")
+                logger.info(f"    - rh.pial: {required_files['rh_surface']}")
+                logger.info(f"    - lh.annot: {required_files['lh_annot']}")
+                logger.info(f"    - rh.annot: {required_files['rh_annot']}")
             self._generate_unity_structure_from_freesurfer()
         else:
-            logger.warning("  ⚠ FreeSurfer文件缺失，将使用默认配置")
-            logger.info(f"  缺失文件: {', '.join(missing_files)}")
-            logger.info("  提示: 将FreeSurfer文件放入以下位置:")
-            for name, path in required_files.items():
-                status = "✓" if path.exists() else "✗"
-                logger.info(f"    {status} {path}")
+            if self.verbose:
+                logger.warning("  ⚠ FreeSurfer文件缺失，将使用默认配置")
+                logger.info(f"  缺失文件: {', '.join(missing_files)}")
+                logger.info("  提示: 将FreeSurfer文件放入以下位置:")
+                for name, path in required_files.items():
+                    status = "✓" if path.exists() else "✗"
+                    logger.info(f"    {status} {path}")
             self._generate_default_unity_structure()
     
     def _generate_unity_structure_from_freesurfer(self):
@@ -262,7 +273,8 @@ Unity项目资源文件：
         with open(config_path, 'w', encoding='utf-8') as f:
             json.dump(default_config, f, indent=2, ensure_ascii=False)
         
-        logger.info(f"  ✓ 默认配置已保存: {config_path.name}")
+        if self.verbose:
+            logger.info(f"  ✓ 默认配置已保存: {config_path.name}")
     
     def generate_unity_scripts(self):
         """
@@ -277,9 +289,10 @@ Unity项目资源文件：
         - TimelineController.cs: 时间轴控制
         - CacheToJsonConverter.cs: Cache文件自动转换为JSON
         """
-        logger.info("\n" + "="*80)
-        logger.info("步骤 3: 复制Unity C#脚本")
-        logger.info("="*80)
+        if self.verbose:
+            logger.info("\n" + "="*80)
+            logger.info("步骤 3: 复制Unity C#脚本")
+            logger.info("="*80)
         
         # 从 unity_examples/ 复制所有Unity C#脚本
         source_scripts_dir = self.project_root / "unity_examples"
@@ -300,13 +313,17 @@ Unity项目资源文件：
                     dst = self.unity_scripts_dir / script
                     import shutil
                     shutil.copy2(src, dst)
-                    logger.info(f"  ✓ 复制: {script}")
+                    if self.verbose:
+                        logger.info(f"  ✓ 复制: {script}")
                 else:
-                    logger.warning(f"  ⚠ 脚本未找到: {script}")
+                    if self.verbose:
+                        logger.warning(f"  ⚠ 脚本未找到: {script}")
         else:
-            logger.warning(f"  ⚠ unity_examples目录未找到: {source_scripts_dir}")
+            if self.verbose:
+                logger.warning(f"  ⚠ unity_examples目录未找到: {source_scripts_dir}")
         
-        logger.info("  ✓ Unity脚本复制完成")
+        if self.verbose:
+            logger.info("  ✓ Unity脚本复制完成")
     
     def _generate_data_loader_script(self):
         """生成数据加载脚本"""
